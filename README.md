@@ -17,8 +17,9 @@ Mesh node (phone/app) --LoRa--> meshtasticd (Pi, SPI radio) --TCP:4403--> bridge
 - A **RAK13300** (Semtech SX1262) LoRa module, typically mounted on the **RAK6421**
   WisBlock base board for Raspberry Pi. The installer ships official presets for
   Slot 1 (`spidev0.0`) and Slot 2 (`spidev0.1`).
-- An AI endpoint: OpenAI, a local [Ollama](https://ollama.com/) server, LM Studio,
-  vLLM, Groq, OpenRouter, or anything speaking the `/v1/chat/completions` protocol.
+- An AI model: by default a small local model served by [Ollama](https://ollama.com/)
+  on the Pi, but any OpenAI-compatible endpoint works (OpenAI, LM Studio, vLLM,
+  Groq, OpenRouter).
 
 ## One-Line Install
 
@@ -38,16 +39,20 @@ sudo ./setup.sh --lora-slot 2
 
 ## Then
 
-1. Edit the AI settings:
+1. Install Ollama and pull the default local model:
+
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ollama pull qwen2.5:1.5b-instruct-q4_K_M
+   ```
+
+2. Edit the AI settings if needed (the defaults already point at Ollama):
 
    ```bash
    sudo nano /opt/meshtastic-ai-bridge/.env
    ```
 
-   Set `AI_API_BASE`, `AI_API_KEY`, and `AI_MODEL` for your backend. Example
-   presets live in `.env.example`.
-
-2. Reboot so SPI is enabled, then check the radio:
+3. Reboot so SPI is enabled, then check the radio:
 
    ```bash
    sudo reboot
@@ -56,7 +61,7 @@ sudo ./setup.sh --lora-slot 2
 
    (Or install the CLI separately with `pip install meshtastic`.)
 
-3. Send a **direct message** to the Pi's node from a Meshtastic phone or app.
+4. Send a **direct message** to the Pi's node from a Meshtastic phone or app.
    The bridge replies with the AI's answer. Broadcast channel messages are
    ignored unless `REPLY_TO_BROADCAST=true` is set in `.env`.
 
@@ -110,26 +115,37 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 |----------|---------|---------|
 | `MESHTASTIC_HOST` | `localhost` | meshtasticd host |
 | `MESHTASTIC_PORT` | `4403` | meshtasticd TCP API port |
-| `AI_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `AI_API_KEY` | | API key (use `ollama` or any string for local servers) |
-| `AI_MODEL` | `gpt-4o-mini` | Model name |
+| `AI_API_BASE` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
+| `AI_API_KEY` | `ollama` | API key (any string for a local server) |
+| `AI_MODEL` | `qwen2.5:1.5b-instruct-q4_K_M` | Model name |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
 | `AI_MAX_TOKENS` | `300` | Max reply length |
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
 | `REPLY_TO_BROADCAST` | `false` | Also answer channel broadcasts |
 | `REPLY_MAX_CHARS` | `180` | Chunk size used to split replies |
 
-### Local Ollama example
+### Local model (default)
+
+The bridge defaults to a small model served by [Ollama](https://ollama.com/)
+on the same Pi. Install it and pull the model:
 
 ```bash
-ollama pull llama3.1
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen2.5:1.5b-instruct-q4_K_M
 ```
 
-```dotenv
-AI_API_BASE=http://127.0.0.1:11434/v1
-AI_API_KEY=ollama
-AI_MODEL=llama3.1
-```
+Pick a model sized for your Pi 4B RAM:
+
+| Model | ~Size | Pi 4 RAM | Use |
+|-------|-------|----------|-----|
+| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | Best starting point |
+| `lfm2.5:1.2b-instruct` | ~0.7 GB | 2-4 GB+ | Efficiency experiment |
+| `llama3.2:1b-instruct-q4_K_M` | ~0.7 GB | 2-4 GB+ | Comparison model |
+| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | **Safe default** |
+| `qwen3:1.7b-instruct-q4_K_M` | ~1.4 GB | 4 GB+ | Higher-quality experiment |
+| `qwen2.5:3b-instruct-q4_K_M` | ~1.8 GB | 8 GB | Upper-end experiment |
+
+Tag names change over time, so confirm with `ollama search <name>` before pulling.
 
 ## Managing Services
 
@@ -146,7 +162,7 @@ sudo systemctl restart meshtastic-ai-bridge
 |---------|-------|
 | No radio | SPI not enabled: reboot, then `ls /dev/spidev*`. For Slot 2, add `dtoverlay=spi0-2cs` if `spidev0.1` is missing |
 | `meshtastic --host localhost` fails | meshtasticd not running: `systemctl status meshtasticd` |
-| No AI reply | `.env` has a valid key; `journalctl -u meshtastic-ai-bridge` |
+| No AI reply | Ollama running, model pulled, `.env` correct; `journalctl -u meshtastic-ai-bridge` |
 | Replies only to DMs | Expected. Set `REPLY_TO_BROADCAST=true` for channel replies |
 | Short replies | `AI_MAX_TOKENS` too low, or replies split by `REPLY_MAX_CHARS` |
 
