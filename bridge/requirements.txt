@@ -1,0 +1,4 @@
+meshtastic>=2.1
+requests>=2.28
+python-dotenv>=1.0
+pubsub

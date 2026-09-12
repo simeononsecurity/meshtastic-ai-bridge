@@ -1,0 +1,17 @@
+[Unit]
+Description=Meshtastic AI Bridge
+After=network-online.target meshtasticd.service
+Wants=meshtasticd.service
+
+[Service]
+Type=simple
+User=meshtasticbridge
+Group=meshtasticbridge
+WorkingDirectory=/opt/meshtastic-ai-bridge
+EnvironmentFile=/opt/meshtastic-ai-bridge/.env
+ExecStart=/opt/meshtastic-ai-bridge/venv/bin/python /opt/meshtastic-ai-bridge/bridge.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

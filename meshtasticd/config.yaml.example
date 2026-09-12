@@ -1,0 +1,12 @@
+# Optional meshtasticd settings.
+#
+# The package ships a complete, working default at /etc/meshtasticd/config.yaml.
+# This file only documents the optional Web server, which you can merge into the
+# default config to get the on-device status page. Most users do not need it.
+#
+#   cp config.yaml.example /etc/meshtasticd/config.yaml
+#   sudo systemctl restart meshtasticd
+#
+webserver:
+  port: 9443
+  rootpath: "/usr/share/meshtasticd/web"
