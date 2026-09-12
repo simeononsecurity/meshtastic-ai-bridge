@@ -7,6 +7,6 @@
 #   cp config.yaml.example /etc/meshtasticd/config.yaml
 #   sudo systemctl restart meshtasticd
 #
-webserver:
-  port: 9443
-  rootpath: "/usr/share/meshtasticd/web"
+Webserver:
+  Port: 9443
+  RootPath: "/usr/share/meshtasticd/web"

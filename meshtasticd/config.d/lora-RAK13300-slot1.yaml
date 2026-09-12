@@ -1,0 +1,21 @@
+# RAK13300 (Semtech SX1262) LoRa module in Slot 1 of the RAK6421 base board.
+# Source: meshtastic/firmware bin/config.d/lora-RAK6421-13300-slot1.yaml
+# BCM GPIO: IRQ=22, Reset=16, Busy=24, Enable=12+13. SPI via spidev0.0 (CE0).
+Meta:
+  name: RAK6421 + RAK13300 Slot 1
+  support: official
+  compatible:
+    - raspberry-pi
+
+Lora:
+  Module: sx1262
+  IRQ: 22      # IO6
+  Reset: 16    # IO4
+  Busy: 24     # IO5
+  Enable_Pins:
+    - 12
+    - 13
+  DIO3_TCXO_VOLTAGE: true
+  DIO2_AS_RF_SWITCH: true
+  spidev: spidev0.0
+  # CS: 8

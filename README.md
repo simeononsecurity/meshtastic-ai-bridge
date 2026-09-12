@@ -14,9 +14,9 @@ Mesh node (phone/app) --LoRa--> meshtasticd (Pi, SPI radio) --TCP:4403--> bridge
 ## What You Need
 
 - Raspberry Pi 4B, Raspberry Pi OS (Bookworm/Trixie, 32-bit or 64-bit), SD card.
-- An **SPI LoRa radio HAT** wired to the Pi. Confirmed SPI hats include the
-  **Adafruit RFM9x**, **Elecrow RFM95 IOT**, and **RAK** SPI boards. UART hats and
-  LoRaWAN (SX1302/SX1303) hats do not work with meshtasticd.
+- A **RAK13300** (Semtech SX1262) LoRa module, typically mounted on the **RAK6421**
+  WisBlock base board for Raspberry Pi. The installer ships official presets for
+  Slot 1 (`spidev0.0`) and Slot 2 (`spidev0.1`).
 - An AI endpoint: OpenAI, a local [Ollama](https://ollama.com/) server, LM Studio,
   vLLM, Groq, OpenRouter, or anything speaking the `/v1/chat/completions` protocol.
 
@@ -30,10 +30,10 @@ That is the whole install. It enables SPI, installs meshtasticd, copies the
 matching LoRa radio preset, installs the bridge, and starts both systemd
 services. It pauses only to ask which radio preset matches your HAT.
 
-To pick the preset in advance (non-interactive):
+The installer defaults to the RAK13300 in Slot 1. For Slot 2:
 
 ```bash
-sudo ./setup.sh --preset lora-MeshAdv-900M30S
+sudo ./setup.sh --lora-slot 2
 ```
 
 ## Then
@@ -72,20 +72,35 @@ The bridge uses the Meshtastic Python library (`TCPInterface`) against the local
 daemon, so no extra hardware or serial port is needed. Long replies are split
 into Meshtastic-sized chunks automatically.
 
-### Radio preset
+### Radio module (RAK13300 / SX1262)
 
-meshtasticd ships ready-made pinouts at `/etc/meshtasticd/available.d/`. The
-installer copies one into `/etc/meshtasticd/config.d/` to enable your radio:
+The installer enables the **RAK13300** by default and copies the matching
+official preset into `/etc/meshtasticd/config.d/`. Slot 1 and Slot 2 use
+different chip-selects and pins:
+
+| | Slot 1 | Slot 2 |
+|---|---|---|
+| SPI device | `spidev0.0` (CE0) | `spidev0.1` (CE1) |
+| IRQ | GPIO 22 | GPIO 18 |
+| Reset | GPIO 16 | GPIO 24 |
+| Busy | GPIO 24 | GPIO 19 |
+| Enable pins | 12, 13 | 26, 23 |
+
+Choose the slot with `--lora-slot`:
 
 ```bash
-ls /etc/meshtasticd/available.d    # list LoRa presets
-sudo cp /etc/meshtasticd/available.d/lora-<your-hat>.yaml /etc/meshtasticd/config.d/
-sudo systemctl restart meshtasticd
+sudo ./setup.sh --lora-slot 2
 ```
 
-If no shipped preset matches your HAT, check the
-[meshtasticd hardware page](https://meshtastic.org/docs/meshtasticd/hardware/)
-for pin details.
+Slot 2 needs both chip-selects present. If `/dev/spidev0.1` does not exist,
+add `dtoverlay=spi0-2cs` to `/boot/firmware/config.txt` and reboot.
+
+For any other SPI radio, pass a preset name and the installer copies it from
+meshtasticd's own `/etc/meshtasticd/available.d/` instead:
+
+```bash
+sudo ./setup.sh --preset lora-Adafruit-RFM9x
+```
 
 ## Configuration
 
@@ -129,7 +144,7 @@ sudo systemctl restart meshtastic-ai-bridge
 
 | Symptom | Check |
 |---------|-------|
-| No radio | SPI not enabled: reboot, then `ls /dev/spidev*` |
+| No radio | SPI not enabled: reboot, then `ls /dev/spidev*`. For Slot 2, add `dtoverlay=spi0-2cs` if `spidev0.1` is missing |
 | `meshtastic --host localhost` fails | meshtasticd not running: `systemctl status meshtasticd` |
 | No AI reply | `.env` has a valid key; `journalctl -u meshtastic-ai-bridge` |
 | Replies only to DMs | Expected. Set `REPLY_TO_BROADCAST=true` for channel replies |
@@ -142,6 +157,7 @@ setup.sh                           one-line installer
 bridge/bridge.py                   Meshtastic <-> AI daemon
 bridge/requirements.txt            Python deps
 bridge/.env.example                configuration template
+meshtasticd/config.d/              RAK13300 slot presets (lora-RAK13300-slot1/2.yaml)
 meshtasticd/config.yaml.example    optional Web server settings
 systemd/meshtastic-ai-bridge.service
 ```

@@ -7,9 +7,10 @@
 # preset, installs the Meshtastic <-> AI bridge, and starts both services.
 #
 # Options:
-#   --preset NAME     Copy a specific LoRa preset from /etc/meshtasticd/available.d
-#                     instead of prompting. Example: --preset lora-MeshAdv-900M30S
-#   --channel IDX     Meshtastic channel to monitor (default 0, not currently used).
+#   --lora-slot N      RAK13300 slot to enable: 1 (spidev0.0, default) or 2
+#                      (spidev0.1). Ignored when --preset is given.
+#   --preset NAME      Override with a specific preset from /etc/meshtasticd/available.d.
+#   --channel IDX      Meshtastic channel to monitor (default 0, not currently used).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,10 +22,13 @@ fi
 
 # --- Resolve the LoRa preset from CLI args ---
 PRESET=""
+LORA_SLOT="1"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --preset)
       PRESET="${2:-}"; shift 2 ;;
+    --lora-slot)
+      LORA_SLOT="${2:-1}"; shift 2 ;;
     --channel)
       shift 2 ;;
     *)
@@ -88,28 +92,33 @@ fi
 apt-get update -qq
 apt-get install -y meshtasticd python3-venv python3-pip
 
-echo "==> [3/6] Configuring the LoRa radio"
+echo "==> [3/6] Configuring the LoRa radio (RAK13300 / SX1262)"
 MESHDIR="/etc/meshtasticd"
-[[ -d "$MESHDIR/config.d" ]] || mkdir -p "$MESHDIR/config.d"
+mkdir -p "$MESHDIR/config.d"
 
 if [[ -n "$PRESET" ]]; then
+  # Use one of the package's own shipped presets.
   SRC="$MESHDIR/available.d/$PRESET"
   if [[ ! -f "$SRC" ]]; then
     echo "!  Preset not found: $SRC"
     echo "   Available LoRa presets:"
-    ls "$MESHDIR/available.d" | grep -i '^lora-' || true
+    ls "$MESHDIR/available.d" 2>/dev/null | grep -i lora || true
     exit 1
   fi
 else
-  echo "    Available LoRa radio presets:"
-  ls "$MESHDIR/available.d" 2>/dev/null | grep -i '^lora-' || true
-  echo
-  read -r -p "    Enter the preset name matching your SPI LoRa HAT: " PRESET
-  SRC="$MESHDIR/available.d/$PRESET"
+  # Default to the bundled RAK13300 preset for the chosen slot.
+  SRC="$SCRIPT_DIR/meshtasticd/config.d/lora-RAK13300-slot${LORA_SLOT}.yaml"
+  if [[ ! -f "$SRC" ]]; then
+    echo "!  Bundled preset missing: $SRC"
+    exit 1
+  fi
 fi
 
 cp "$SRC" "$MESHDIR/config.d/"
-echo "    Copied $PRESET -> $MESHDIR/config.d/"
+echo "    Copied $(basename "$SRC") -> $MESHDIR/config.d/"
+if [[ -z "$PRESET" && "$LORA_SLOT" == "1" ]]; then
+  echo "    If your RAK13300 is in Slot 2 instead, re-run: sudo $0 --lora-slot 2"
+fi
 
 echo "==> [4/6] Installing the AI bridge"
 INSTALL_DIR="/opt/meshtastic-ai-bridge"
