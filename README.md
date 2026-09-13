@@ -21,6 +21,32 @@ Mesh node (phone/app) --LoRa--> meshtasticd (Pi, SPI radio) --TCP:4403--> bridge
   on the Pi, but any OpenAI-compatible endpoint works (OpenAI, LM Studio, vLLM,
   Groq, OpenRouter).
 
+### Recommended hardware for a low-power deployment
+
+The current reference platform is a **Raspberry Pi 4B**, but a practical
+solar-capable build should use the smallest reliable configuration:
+
+- **Raspberry Pi 4B, 2 GB RAM** for the tested baseline. Use a 4 GB model if
+  you want larger local models or more offline services.
+- **64-bit Raspberry Pi OS** on a high-endurance microSD card for testing; use
+  a small USB SSD for a more durable always-on deployment and larger knowledge
+  bundles.
+- **SX1262 LoRa hardware** such as the RAK13300 on a compatible RAK6421 base,
+  or another supported Meshtastic radio preset. Keep the radio physically
+  separated from noisy power converters and USB devices where possible.
+- **5 V USB-C supply with adequate headroom**, a protected LiFePO4 battery,
+  solar charge controller, and a panel sized for the local weather and duty
+  cycle. The controller and battery are required; a panel alone cannot provide
+  stable Pi power through clouds or nighttime.
+- **Passive cooling or a low-power fan case**. Thermal throttling increases
+  model latency and energy use.
+
+For the lowest power draw, use `qwen2.5:0.5b` or another small quantized model,
+keep responses short, prefer local Kiwix content, disable public retrieval when
+offline, and avoid replying on shared LongFast channels. Solar sizing should be
+measured at the completed installation; it is not guaranteed by the hardware
+list alone.
+
 ## One-Line Install
 
 ```bash
@@ -234,6 +260,14 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
 | `REPLY_TO_BROADCAST` | `false` | Also answer channel broadcasts |
 | `REPLY_MAX_CHARS` | `180` | Maximum chunk size; split at word boundaries |
+| `REPLY_CHANNELS` | empty | Optional comma-separated channel allowlist |
+| `REPLY_ON_LONGFAST` | `false` | Permit replies when channel 0 is named LongFast |
+| `CHUNK_DELAY_SECONDS` | `1.0` | Delay between reply chunks |
+| `DIRECT_RETRY_COUNT` | `2` | Additional direct-send attempts after failure |
+| `DIRECT_RETRY_DELAY_SECONDS` | `2.0` | Delay between direct-send attempts |
+| `AI_QUEUE_TIMEOUT_SECONDS` | `180` | Expire queued requests after this time |
+| `BOT_LOOP_MARKERS` | `m@i,~ai` | Prefixes from other AI bots to ignore |
+| `BOT_LOOP_WINDOW_SECONDS` | `300` | Recent-response loop suppression window |
 
 Direct replies use Meshtastic reliable delivery with ACK/NAK tracking. Broadcast
 replies are logged as queued transmissions because a broadcast has no single

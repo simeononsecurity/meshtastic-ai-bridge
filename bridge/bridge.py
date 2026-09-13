@@ -57,12 +57,28 @@ AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", "300"))
 AI_TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.7"))
 AI_QUEUE_MAX = int(os.environ.get("AI_QUEUE_MAX", "8"))
 PACKET_DEDUPE_SECONDS = int(os.environ.get("PACKET_DEDUPE_SECONDS", "120"))
+AI_QUEUE_TIMEOUT_SECONDS = int(os.environ.get("AI_QUEUE_TIMEOUT_SECONDS", "180"))
 
 REPLY_TO_BROADCAST = os.environ.get("REPLY_TO_BROADCAST", "false").lower() in (
     "1", "true", "yes", "on",
 )
 REPLY_MAX_CHARS = int(os.environ.get("REPLY_MAX_CHARS", "180"))
+CHUNK_DELAY_SECONDS = float(os.environ.get("CHUNK_DELAY_SECONDS", "1.0"))
+DIRECT_RETRY_COUNT = int(os.environ.get("DIRECT_RETRY_COUNT", "2"))
+DIRECT_RETRY_DELAY_SECONDS = float(os.environ.get("DIRECT_RETRY_DELAY_SECONDS", "2.0"))
 BOT_PREFIX = os.environ.get("BOT_PREFIX", "!bot ")
+REPLY_CHANNELS = {
+    int(value.strip()) for value in os.environ.get("REPLY_CHANNELS", "").split(",")
+    if value.strip().isdigit()
+}
+REPLY_ON_LONGFAST = os.environ.get("REPLY_ON_LONGFAST", "false").lower() in (
+    "1", "true", "yes", "on",
+)
+CHANNEL_0_NAME = os.environ.get("CHANNEL_0_NAME", "LongFast").strip()
+BOT_LOOP_MARKERS = tuple(filter(None, (
+    value.strip().lower() for value in os.environ.get("BOT_LOOP_MARKERS", "m@i,~ai").split(",")
+)))
+BOT_LOOP_WINDOW_SECONDS = int(os.environ.get("BOT_LOOP_WINDOW_SECONDS", "300"))
 AI_SYSTEM_PROMPT_FILE = os.environ.get(
     "AI_SYSTEM_PROMPT_FILE", "/opt/meshtastic-ai-bridge/agent_prompt.txt"
 )
@@ -102,7 +118,12 @@ _health = {
     "duplicate_packets": 0,
     "queued_requests": 0,
     "queue_rejections": 0,
+    "queue_timeouts": 0,
+    "loop_ignored": 0,
+    "channel_ignored": 0,
+    "direct_retries": 0,
 }
+_recent_replies = {}
 
 
 def _jsonable(value):
@@ -150,6 +171,8 @@ def health_snapshot():
         "node_id": _my_id,
         "broadcast_replies": REPLY_TO_BROADCAST,
         "bot_prefix": BOT_PREFIX,
+        "reply_channels": sorted(REPLY_CHANNELS),
+        "reply_on_longfast": REPLY_ON_LONGFAST,
     })
     return state
 
@@ -245,6 +268,15 @@ def ai_worker():
         with _lock:
             _ai_active = True
         try:
+            if time.time() - job["accepted_at"] > AI_QUEUE_TIMEOUT_SECONDS:
+                with _lock:
+                    _health["queue_timeouts"] += 1
+                log(f"Queue timeout for {job['sender']}; request expired")
+                try:
+                    send_chunks(job["interface"], "Busy - request expired; try again.", job["destination"], job["channel"])
+                except Exception as exc:
+                    log(f"Queue-timeout notice failed: {classify_delivery_error(exc)}")
+                continue
             interface = job["interface"]
             sender = job["sender"]
             text = job["text"]
@@ -259,6 +291,8 @@ def ai_worker():
                 log(f"AI request failed for {sender}: {exc}")
                 reply = f"AI error: {exc}"
             log_interaction(sender, text, reply)
+            with _lock:
+                _recent_replies[reply.strip().lower()] = time.time()
             try:
                 send_chunks(interface, reply, job["destination"], job["channel"])
                 with _lock:
@@ -291,6 +325,27 @@ def deterministic_command(text):
             f"{'on' if state['broadcast_replies'] else 'off'}."
         )
     return ""
+
+
+def is_loop_message(text):
+    """Reject known AI markers and recently generated response echoes."""
+    normalized = text.strip().lower()
+    now = time.time()
+    with _lock:
+        expired = [key for key, timestamp in _recent_replies.items()
+                   if now - timestamp > BOT_LOOP_WINDOW_SECONDS]
+        for key in expired:
+            _recent_replies.pop(key, None)
+        return normalized.startswith(BOT_LOOP_MARKERS) or normalized in _recent_replies
+
+
+def channel_allowed(channel_index):
+    """Apply explicit channel policy; empty allowlist means all channels."""
+    if REPLY_CHANNELS and channel_index not in REPLY_CHANNELS:
+        return False
+    if channel_index == 0 and CHANNEL_0_NAME.lower() == "longfast" and not REPLY_ON_LONGFAST:
+        return False
+    return True
 
 
 def classify_delivery_error(exc):
@@ -508,24 +563,37 @@ def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0)
                 f"channel={channel_index}: {payload}"
             )
 
-        with _mesh_io_lock:
-            if direct:
-                packet = interface.sendData(
-                    chunk.encode("utf-8"),
-                    destinationId=destination_id,
-                    portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-                    channelIndex=channel_index,
-                    wantAck=True,
-                    onResponse=delivery_callback,
-                    onResponseAckPermitted=True,
-                )
-            else:
-                packet = interface.sendText(
-                    chunk,
-                    destinationId=destination_id,
-                    channelIndex=channel_index,
-                    wantAck=False,
-                )
+        packet = None
+        attempts = DIRECT_RETRY_COUNT + 1 if direct else 1
+        for attempt in range(attempts):
+            try:
+                with _mesh_io_lock:
+                    if direct:
+                        packet = interface.sendData(
+                            chunk.encode("utf-8"),
+                            destinationId=destination_id,
+                            portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+                            channelIndex=channel_index,
+                            wantAck=True,
+                            onResponse=delivery_callback,
+                            onResponseAckPermitted=True,
+                        )
+                    else:
+                        packet = interface.sendText(
+                            chunk,
+                            destinationId=destination_id,
+                            channelIndex=channel_index,
+                            wantAck=False,
+                        )
+                if direct and attempt:
+                    with _lock:
+                        _health["direct_retries"] += 1
+                break
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+                log(f"Direct send retry destination={destination_id} attempt={attempt + 2}")
+                time.sleep(DIRECT_RETRY_DELAY_SECONDS)
         packet_id = getattr(packet, "id", None)
         packet_ref["id"] = packet_id
         delivery = "reliable direct; awaiting ACK/NAK" if direct else "broadcast; no delivery ACK"
@@ -541,7 +609,7 @@ def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0)
             f"Queued reply packet={packet_id} destination={destination_id} "
             f"channel={channel_index} chars={len(chunk)} ({delivery})"
         )
-        time.sleep(1)
+        time.sleep(CHUNK_DELAY_SECONDS)
 
 
 def ensure_my_id(interface):
@@ -583,6 +651,12 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
     if ensure_my_id(interface) and _my_id and sender == _my_id:
         return  # ignore our own echoed replies
 
+    if is_loop_message(text):
+        with _lock:
+            _health["loop_ignored"] += 1
+        log(f"Ignored probable bot-loop message from={sender}")
+        return
+
     to = packet.get("to")
     if to == BROADCAST_ADDR:
         if not REPLY_TO_BROADCAST or not text.lower().startswith(BOT_PREFIX.lower()):
@@ -594,6 +668,11 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         # its CLI-style sys.exit path and silently loses the reply.
         destination_id = BROADCAST_ADDR
         channel_index = int(packet.get("channel", 0) or 0)
+        if not channel_allowed(channel_index):
+            with _lock:
+                _health["channel_ignored"] += 1
+            log(f"Ignored channel message: channel={channel_index} disabled by policy")
+            return
         text = text[len(BOT_PREFIX):].strip()
         if not text:
             return
@@ -620,6 +699,7 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         "text": text,
         "destination": destination_id,
         "channel": channel_index,
+        "accepted_at": time.time(),
     }
     with _lock:
         was_busy = _ai_active or not _ai_queue.empty()
