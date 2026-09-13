@@ -145,6 +145,19 @@ systemctl enable meshtastic-ai-bridge
 
 echo "==> [6/6] Starting services"
 systemctl restart meshtasticd
+sleep 5
+
+# Apply the admin key so the node can be managed from another Meshtastic node.
+ADMIN_KEY="$(sed -n 's/^MESHTASTIC_ADMIN_KEY=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+if [[ -n "$ADMIN_KEY" ]]; then
+  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost --set security.admin_key "$ADMIN_KEY" >/dev/null 2>&1; then
+    echo "    Applied Meshtastic admin key."
+  else
+    echo "!   Could not apply the admin key. After meshtasticd is up, run:"
+    echo "    $INSTALL_DIR/venv/bin/meshtastic --host localhost --set security.admin_key \"<key>\""
+  fi
+fi
+
 systemctl restart meshtastic-ai-bridge || true
 
 cat <<EOF
