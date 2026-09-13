@@ -362,6 +362,51 @@ baseline; production hosts should use the 4–8 GB guidance above:
 
 Tag names change over time, so confirm with `ollama search <name>` before pulling.
 
+### Self-checks
+
+Run the offline repository checks before deploying. They do not require a radio,
+AI backend, network access, or secrets:
+
+```bash
+./scripts/self_check.sh
+```
+
+The checks parse every project Python file, run `bash -n` against every shell
+script, detect duplicate `.env.example` keys, verify that MCP remains disabled by
+default, and validate the Docker Compose file when Docker is installed. A failed
+check returns a non-zero exit status, so it can be used from CI or a deployment
+script.
+
+### Optional Docker services
+
+The radio daemon, bridge, and dashboard remain native systemd services because
+they need host access to the SPI radio, Meshtastic TCP endpoint, and local files.
+Docker Compose is provided for the two services that benefit most from isolation:
+the local Ollama model server and the Kiwix HTTP server. Both bind only to
+loopback by default.
+
+Start either service, or both:
+
+```bash
+docker compose --profile ollama up -d
+docker compose --profile kiwix up -d
+# or: docker compose --profile all up -d
+```
+
+The Ollama model cache is kept in the named `ollama_models` volume. Kiwix reads
+ZIM files from `./zim` (or `KIWIX_DATA_DIR=/absolute/path/to/zim`) read-only.
+After starting Ollama, pull the configured model inside the container:
+
+```bash
+docker compose exec ollama ollama pull qwen3.5:0.8b
+```
+
+The host bridge can use the containerized Ollama endpoint with the existing
+default `AI_API_BASE=http://127.0.0.1:11434/v1`. For containerized Kiwix, keep
+the host bridge's `LOCAL_KIWIX_URL=http://127.0.0.1:8766`. Docker is optional;
+the existing native Ollama and systemd Kiwix paths remain supported and are
+preferable on a constrained Pi when container overhead or image storage matters.
+
 ### MQTT (optional, off by default)
 
 meshtasticd can bridge the mesh to an MQTT broker over the Pi's internet

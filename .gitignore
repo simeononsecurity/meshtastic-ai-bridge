@@ -7,6 +7,7 @@ live_config.json
 data/
 *.sqlite3
 zim/
+ollama_data/
 
 # Python
 venv/

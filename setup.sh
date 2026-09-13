@@ -128,6 +128,7 @@ cp -r "$SCRIPT_DIR/dashboard" "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/scripts" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/scripts/start_kiwix.sh" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/scripts/install_offline_knowledge.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/self_check.sh" 2>/dev/null || true
 mkdir -p "$INSTALL_DIR/data"
 if [[ ! -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/.env.example" ]]; then
   cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
