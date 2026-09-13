@@ -653,7 +653,31 @@ def ask_ai(prompt):
     resp = requests.post(url, headers=headers, json=payload, timeout=120)
     resp.raise_for_status()
     data = resp.json()
-    return data["choices"][0]["message"]["content"].strip()
+    choice = data["choices"][0]
+    answer = choice["message"]["content"].strip()
+    # Small local models can hit the token ceiling mid-sentence. Ask for a
+    # short continuation rather than sending an answer that ends abruptly.
+    if choice.get("finish_reason") == "length" and answer:
+        continuation_payload = {
+            "model": read_live_model(),
+            "messages": [
+                {"role": "system", "content": system_prompt()},
+                {"role": "user", "content": (
+                    "Continue this answer from the last complete idea. Do not repeat text. "
+                    "Use at most two short sentences and finish cleanly.\n\n" + answer
+                )},
+            ],
+            "max_tokens": min(80, AI_MAX_TOKENS),
+            "temperature": AI_TEMPERATURE,
+        }
+        continuation = requests.post(
+            url, headers=headers, json=continuation_payload, timeout=120,
+        )
+        continuation.raise_for_status()
+        extra = continuation.json()["choices"][0]["message"]["content"].strip()
+        if extra:
+            answer = f"{answer} {extra}"
+    return answer
 
 
 def _delivery_callback(destination_id, channel_index, packet_id):

@@ -283,7 +283,7 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_MODEL` | `qwen3.5:0.8b` | Model name |
 | `SENSOR_URL` | empty | Optional local JSON sensor adapter endpoint |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
-| `AI_MAX_TOKENS` | `160` | Max generated tokens for practical mesh replies |
+| `AI_MAX_TOKENS` | `220` | Max generated tokens; truncated answers receive a short continuation |
 | `AI_QUEUE_MAX` | `8` | Maximum queued AI requests |
 | `PACKET_DEDUPE_SECONDS` | `120` | Duplicate packet suppression window |
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
