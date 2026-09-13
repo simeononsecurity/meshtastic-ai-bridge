@@ -232,6 +232,23 @@ Hardware notes:
   concentrator socket (SenseCAP M1 / Seeed WM1302 HAT), which wires SPI for an
   SX1302 and does not route USB, so the node is unreachable there.
 
+The RAK19713 uses standard mini-PCIe pins for its host link:
+
+| Mini-PCIe pin | RAK19713 signal |
+|---------------|-----------------|
+| 36 | USB D− |
+| 38 | USB D+ |
+| 31 | UART2 RX |
+| 33 | UART2 TX |
+| 22 | `PERST#` reset |
+| 2 / 24 / 39 / 41 / 52 | 3.3 V (power) |
+| 4, 9, 15, 18, 21, 26, 27, 29, 34, 35, 37, 40, 43, 50 | GND |
+
+A mini-PCIe-to-USB adapter routes pins 36/38 (plus power and ground), which is
+all the node needs to flash and to enumerate as `/dev/ttyACM0`. To hand-wire it
+instead, bring USB D+/D− (36/38), one 3.3 V pin, and a ground pin to a USB-A
+lead and plug that into the Pi.
+
 This offloads all radio processing to the node's own MCU, which is lighter than
 meshtasticd for a 2 GB Pi.
 
