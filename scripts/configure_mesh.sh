@@ -65,6 +65,11 @@ else
 fi
 
 # --- LoRa region + global modem preset (shared by every channel) ---
+SHORT_NAME="$(get MESHTASTIC_SHORT_NAME)"
+[[ -n "$SHORT_NAME" ]] && apply "device.short_name=$SHORT_NAME" --set device.short_name "$SHORT_NAME"
+LONG_NAME="$(get MESHTASTIC_LONG_NAME)"
+[[ -n "$LONG_NAME" ]] && apply "device.long_name=$LONG_NAME" --set device.long_name "$LONG_NAME"
+
 REGION="$(get MESHTASTIC_REGION)"
 [[ -n "$REGION" ]] && apply "lora.region=$REGION" --set lora.region "$REGION"
 PRESET="$(get LORA_MODEM_PRESET)"

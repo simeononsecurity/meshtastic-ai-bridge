@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SoS Mesh Assistant</title>
+  <title>Meshtastic Mesh Assistant</title>
   <style>
     :root{--bg:#0b1020;--panel:#121a2d;--panel2:#17223a;--line:#263451;--text:#edf3ff;--muted:#8fa1c0;--blue:#5aa7ff;--green:#4cdb9b;--red:#ff7185;--yellow:#ffd166}
     *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#172c50 0,#0b1020 42%);color:var(--text);font:14px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -12,7 +12,7 @@
   </style>
 </head>
 <body>
-<header><h1>SoS Mesh Assistant</h1><span class="sub">Meshtastic AI bridge control center</span><span id="mesh" class="pill">mesh checking…</span><span id="model" class="pill">model…</span><button id="refresh" class="primary">Refresh</button></header>
+<header><h1>Meshtastic Mesh Assistant</h1><span class="sub">Meshtastic AI bridge control center</span><span id="mesh" class="pill">mesh checking…</span><span id="model" class="pill">model…</span><button id="refresh" class="primary">Refresh</button></header>
 <main>
   <section class="card wide"><h2>Overview</h2><div class="stats"><div class="stat"><span>Mesh node</span><b id="node">—</b></div><div class="stat"><span>Queue depth</span><b id="queue">—</b></div><div class="stat"><span>Bot prefix</span><b id="prefix">—</b></div></div><div class="notice" id="notice">The dashboard uses the bridge-owned connection queue; it will not open a competing TCP session.</div></section>
   <section class="card side"><h2>Services</h2><div id="services"></div></section>

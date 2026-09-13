@@ -1,4 +1,4 @@
-# Meshtastic AI Bridge
+# Local Meshtastic AI Bridge
 
 Run an AI assistant on a Raspberry Pi 4B and make it reachable over a
 [Meshtastic](https://meshtastic.org/) mesh via an SPI LoRa radio. Anyone on the
@@ -64,6 +64,61 @@ sudo ./setup.sh --lora-slot 2
 4. Send a **direct message** to the Pi's node from a Meshtastic phone or app.
    The bridge replies with the AI's answer. Broadcast channel messages are
    ignored unless `REPLY_TO_BROADCAST=true` is set in `.env`.
+
+During setup, the installer offers an offline knowledge-bundle menu. The
+selection is stored in `.env` and downloads resumable Kiwix ZIM files rather
+than expanding them into a duplicate database:
+
+| Bundle | Contents | Approximate download |
+|--------|----------|----------------------:|
+| `medical` | WikiMed, WikEM, NHS Medicines, CDC Travelers' Health | 0.7 GB |
+| `food` | Food preparation, public-domain recipes, and FOSS Cooking | 0.2 GB |
+| `networking` | Computer and network-engineering references | 0.6 GB |
+| `reference` | Simple English Wikipedia compact reference corpus | 0.5 GB |
+
+Configure the selection before running setup:
+
+```dotenv
+KIWIX_BUNDLES=medical,food,networking
+KIWIX_INTERACTIVE=false
+KIWIX_MAX_DOWNLOAD_GB=4
+```
+
+Use `KIWIX_BUNDLES=prompt` to choose interactively, `none` to skip downloads,
+or `all` for all supported compact bundles. The installer refuses selections
+above `KIWIX_MAX_DOWNLOAD_GB`; downloads resume safely if setup is interrupted.
+
+### Optional local Wikipedia RAG
+
+Wiki requests prefer a local SQLite FTS5 index when one is installed. This
+keeps the lookup private and avoids running an embedding model or vector
+database on the Pi. The index is intentionally generated data and is ignored
+by Git; provide a curated or licensed JSONL export rather than committing a
+Wikipedia dump to the repository.
+
+Each JSONL line must contain `title` and either `text` or `extract`, with an
+optional `url`:
+
+```json
+{"title":"Raspberry Pi","text":"A family of single-board computers.","url":"https://en.wikipedia.org/wiki/Raspberry_Pi"}
+```
+
+Build and install the index on the node:
+
+```bash
+sudo install -d -o meshtasticbridge -g meshtasticbridge /opt/meshtastic-ai-bridge/data
+sudo /opt/meshtastic-ai-bridge/venv/bin/python \
+  /opt/meshtastic-ai-bridge/scripts/build_local_wiki_index.py \
+  /path/to/wiki.jsonl /opt/meshtastic-ai-bridge/data/wiki.sqlite3
+sudo chown meshtasticbridge:meshtasticbridge /opt/meshtastic-ai-bridge/data/wiki.sqlite3
+sudo systemctl restart meshtastic-ai-bridge
+```
+
+Set `LOCAL_WIKI_ENABLED=true` and `LOCAL_WIKI_INDEX` in `.env`. A request such
+as `!bot wiki Raspberry Pi` searches the local index first. If there is no local
+match and `WEB_RETRIEVAL_ENABLED=true`, the bridge falls back to Wikipedia's
+public API. Set `WEB_RETRIEVAL_ENABLED=false` for a fully local wiki-only
+deployment.
 
 ## How It Works
 
@@ -136,6 +191,13 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
 | `REPLY_TO_BROADCAST` | `false` | Also answer channel broadcasts |
 | `REPLY_MAX_CHARS` | `180` | Chunk size used to split replies |
+| `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
+| `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
+| `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |
+| `LOCAL_KIWIX_ENABLED` | `true` | Search the local full-text Kiwix corpus first |
+| `LOCAL_KIWIX_URL` | `http://127.0.0.1:8766` | Loopback Kiwix search service |
+| `KIWIX_BUNDLES` | `prompt` | Offline bundle selection |
+| `KIWIX_MAX_DOWNLOAD_GB` | `4` | Maximum estimated bundle download |
 
 ### Local model (default)
 
@@ -183,6 +245,8 @@ by `scripts/configure_mesh.sh` (run by `setup.sh` and by the dashboard).
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `LORA_RADIO_PRESET` | `RAK13300-slot1` | Which `meshtasticd/config.d/lora-<name>.yaml` enables the radio |
+| `MESHTASTIC_SHORT_NAME` | `BOT` | Four-character node short name |
+| `MESHTASTIC_LONG_NAME` | `Mesh Assistant` | Node long name |
 | `MESHTASTIC_REGION` | `UNSET` | LoRa region (`US`, `EU_868`, ...) |
 | `LORA_MODEM_PRESET` | `LONG_FAST` | Global modem preset (`LONG_FAST`, `SHORT_FAST`, ...) |
 | `CHANNEL_0_NAME` | `LongFast` | Primary channel name |
@@ -348,11 +412,15 @@ setup.sh                           one-line installer
 bridge/bridge.py                   Meshtastic <-> AI daemon (logs to responses.jsonl, reads live_config.json)
 bridge/requirements.txt            Python deps
 bridge/.env.example                configuration template
+scripts/build_local_wiki_index.py  builds the optional local Wikipedia FTS5 index
 scripts/configure_mesh.sh          applies .env -> meshtastic (region, channels, MQTT, admin key)
+scripts/install_offline_knowledge.sh downloads selected Kiwix offline bundles
+scripts/start_kiwix.sh             starts the local Kiwix HTTP service
 dashboard/                         local Flask web dashboard (port 8080)
 meshtasticd/config.d/              radio presets (RAK13300 / RAK13302 / MeshStick) + README
 meshtasticd/config.yaml.example    optional Web server settings
 systemd/meshtastic-ai-bridge.service
+systemd/meshtastic-kiwix.service
 systemd/meshtastic-dashboard.service
 ```
 

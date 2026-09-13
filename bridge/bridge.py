@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 from pubsub import pub
 from meshtastic.tcp_interface import TCPInterface
 from meshtastic.serial_interface import SerialInterface
+from local_wiki import search as search_local_wiki
+from local_kiwix import search as search_local_kiwix
 
 load_dotenv()
 
@@ -64,10 +66,16 @@ AI_SYSTEM_PROMPT_FILE = os.environ.get(
 WEB_RETRIEVAL_ENABLED = os.environ.get("WEB_RETRIEVAL_ENABLED", "true").lower() in (
     "1", "true", "yes", "on",
 )
+LOCAL_WIKI_ENABLED = os.environ.get("LOCAL_WIKI_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on",
+)
+LOCAL_KIWIX_ENABLED = os.environ.get("LOCAL_KIWIX_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on",
+)
 DEFAULT_WEATHER_LOCATION = os.environ.get("DEFAULT_WEATHER_LOCATION", "").strip()
 DEFAULT_NEWS_TOPIC = os.environ.get("DEFAULT_NEWS_TOPIC", "").strip()
 HTTP_USER_AGENT = os.environ.get(
-    "HTTP_USER_AGENT", "SoS-Mesh-Assistant/1.0 (Meshtastic AI bridge)"
+    "HTTP_USER_AGENT", "Local-Meshtastic-Assistant/1.0 (Meshtastic AI bridge)"
 ).strip()
 
 LOG_PATH = os.environ.get("RESPONSES_LOG", "/opt/meshtastic-ai-bridge/responses.jsonl")
@@ -202,7 +210,7 @@ def system_prompt():
 
 def retrieve_context(query):
     """Fetch small, source-labeled snippets on explicit wiki/weather/news requests."""
-    if not WEB_RETRIEVAL_ENABLED:
+    if not WEB_RETRIEVAL_ENABLED and not LOCAL_WIKI_ENABLED:
         return ""
     normalized = re.sub(r"\s+", " ", query.strip())
     lower = normalized.lower()
@@ -229,6 +237,14 @@ def retrieve_context(query):
         command, value = "wiki", wiki_match.group(1).strip()
     try:
         if command.lower() in ("wiki", "wikipedia") and value:
+            if LOCAL_WIKI_ENABLED:
+                local_result = search_local_wiki(value)
+                if local_result:
+                    return local_result
+            if LOCAL_KIWIX_ENABLED:
+                local_result = search_local_kiwix(value)
+                if local_result:
+                    return local_result
             search = requests.get(
                 "https://en.wikipedia.org/w/rest.php/v1/search/page",
                 params={"q": value, "limit": 1}, timeout=8,

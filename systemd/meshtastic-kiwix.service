@@ -1,0 +1,14 @@
+[Unit]
+Description=Local Offline Kiwix Knowledge Library
+After=network.target
+
+[Service]
+Type=simple
+User=meshtasticbridge
+Group=meshtasticbridge
+ExecStart=/opt/meshtastic-ai-bridge/scripts/start_kiwix.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

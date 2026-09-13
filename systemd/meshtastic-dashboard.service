@@ -1,5 +1,5 @@
 [Unit]
-Description=Meshtastic AI Bridge Dashboard
+Description=Local Meshtastic AI Bridge Dashboard
 After=network-online.target
 
 [Service]

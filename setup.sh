@@ -90,7 +90,7 @@ else
     | gpg --dearmor | tee "$KEY" > /dev/null
 fi
 apt-get update -qq
-apt-get install -y meshtasticd python3-venv python3-pip
+apt-get install -y meshtasticd python3-venv python3-pip kiwix-tools
 
 echo "==> [3/6] Configuring the LoRa radio (RAK13300 / SX1262)"
 MESHDIR="/etc/meshtasticd"
@@ -126,6 +126,9 @@ mkdir -p "$INSTALL_DIR"
 cp -r "$SCRIPT_DIR/bridge/." "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/dashboard" "$INSTALL_DIR/"
 cp -r "$SCRIPT_DIR/scripts" "$INSTALL_DIR/"
+chmod +x "$INSTALL_DIR/scripts/start_kiwix.sh" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/install_offline_knowledge.sh" 2>/dev/null || true
+mkdir -p "$INSTALL_DIR/data"
 if [[ ! -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/.env.example" ]]; then
   cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
   echo "    Created $INSTALL_DIR/.env (edit it with your AI API details before use)"
@@ -139,9 +142,16 @@ if ! id -u meshtasticbridge >/dev/null 2>&1; then
 fi
 chown -R meshtasticbridge:meshtasticbridge "$INSTALL_DIR"
 
+echo "==> [4b/6] Installing selected offline knowledge bundles"
+"$INSTALL_DIR/scripts/install_offline_knowledge.sh" "$INSTALL_DIR/.env"
+
 echo "==> [5/6] Installing systemd service"
 cp "$SCRIPT_DIR/systemd/meshtastic-ai-bridge.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/systemd/meshtastic-dashboard.service" /etc/systemd/system/
+if command -v kiwix-serve >/dev/null 2>&1; then
+  cp "$SCRIPT_DIR/systemd/meshtastic-kiwix.service" /etc/systemd/system/
+  systemctl enable meshtastic-kiwix
+fi
 systemctl daemon-reload
 systemctl enable meshtasticd
 systemctl enable meshtastic-ai-bridge
@@ -149,6 +159,7 @@ systemctl enable meshtastic-dashboard
 
 echo "==> [6/6] Starting services"
 systemctl restart meshtasticd
+if command -v kiwix-serve >/dev/null 2>&1; then systemctl restart meshtastic-kiwix; fi
 sleep 5
 
 echo "==> [7/7] Applying Mesh config (radio region/preset, channels, admin key, MQTT)"

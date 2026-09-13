@@ -4,6 +4,9 @@
 # Runtime data
 responses.jsonl
 live_config.json
+data/
+*.sqlite3
+zim/
 
 # Python
 venv/

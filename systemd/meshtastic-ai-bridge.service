@@ -1,5 +1,5 @@
 [Unit]
-Description=Meshtastic AI Bridge
+Description=Local Meshtastic AI Bridge
 After=network-online.target meshtasticd.service
 Wants=meshtasticd.service
 
