@@ -16,8 +16,12 @@ works with OpenAI, Ollama, LM Studio, vLLM, Groq, OpenRouter, and others.
 
 import json
 import os
+import queue
+import re
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote, quote_plus
 
 import requests
 from dotenv import load_dotenv
@@ -53,6 +57,18 @@ REPLY_TO_BROADCAST = os.environ.get("REPLY_TO_BROADCAST", "false").lower() in (
     "1", "true", "yes", "on",
 )
 REPLY_MAX_CHARS = int(os.environ.get("REPLY_MAX_CHARS", "180"))
+BOT_PREFIX = os.environ.get("BOT_PREFIX", "!bot ")
+AI_SYSTEM_PROMPT_FILE = os.environ.get(
+    "AI_SYSTEM_PROMPT_FILE", "/opt/meshtastic-ai-bridge/agent_prompt.txt"
+)
+WEB_RETRIEVAL_ENABLED = os.environ.get("WEB_RETRIEVAL_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on",
+)
+DEFAULT_WEATHER_LOCATION = os.environ.get("DEFAULT_WEATHER_LOCATION", "").strip()
+DEFAULT_NEWS_TOPIC = os.environ.get("DEFAULT_NEWS_TOPIC", "").strip()
+HTTP_USER_AGENT = os.environ.get(
+    "HTTP_USER_AGENT", "SoS-Mesh-Assistant/1.0 (Meshtastic AI bridge)"
+).strip()
 
 LOG_PATH = os.environ.get("RESPONSES_LOG", "/opt/meshtastic-ai-bridge/responses.jsonl")
 LIVE_CONFIG_PATH = os.environ.get("LIVE_CONFIG", "/opt/meshtastic-ai-bridge/live_config.json")
@@ -60,10 +76,201 @@ LIVE_CONFIG_PATH = os.environ.get("LIVE_CONFIG", "/opt/meshtastic-ai-bridge/live
 _my_id = None
 _inflight = set()
 _lock = threading.Lock()
+_mesh_io_lock = threading.RLock()
+_interface = None
+_control_queue = queue.Queue()
+
+
+def _jsonable(value):
+    """Convert library/protobuf values into safe JSON-compatible values."""
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        if isinstance(value, dict):
+            return {str(k): _jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_jsonable(v) for v in value]
+        return str(value)
+
+
+def mesh_snapshot():
+    """Return state from the bridge-owned interface; never opens another TCP session."""
+    interface = _interface
+    if interface is None:
+        return {"connected": False, "queue_depth": _control_queue.qsize()}
+    with _mesh_io_lock:
+        return _jsonable({
+            "connected": interface.isConnected.is_set(),
+            "my_id": _my_id,
+            "my_info": interface.myInfo,
+            "metadata": interface.metadata,
+            "nodes": interface.nodes or {},
+            "channels": getattr(interface, "_localChannels", None) or [],
+            "queue_depth": _control_queue.qsize(),
+        })
+
+
+def run_control_job(command):
+    """Execute a dashboard mesh request through the one bridge-owned interface."""
+    if command == "snapshot":
+        return mesh_snapshot()
+    if command == "heartbeat":
+        with _mesh_io_lock:
+            if _interface is None or not _interface.isConnected.is_set():
+                raise RuntimeError("Meshtastic interface is not connected")
+            _interface.sendHeartbeat()
+        return {"ok": True}
+    raise ValueError(f"unknown control command: {command}")
+
+
+def control_worker():
+    while True:
+        job = _control_queue.get()
+        try:
+            job["result"] = run_control_job(job["command"])
+        except Exception as exc:  # surface the error to the waiting HTTP request
+            job["error"] = str(exc)
+        finally:
+            job["done"].set()
+            _control_queue.task_done()
+
+
+class ControlHandler(BaseHTTPRequestHandler):
+    """Small localhost-only API used by the dashboard."""
+
+    def log_message(self, *_args):
+        return
+
+    def send_json(self, status, payload):
+        body = json.dumps(_jsonable(payload)).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802
+        if self.path in ("/health", "/snapshot"):
+            job = {"command": "snapshot", "done": threading.Event()}
+            _control_queue.put(job)
+            if not job["done"].wait(10):
+                return self.send_json(504, {"error": "control queue timeout"})
+            if job.get("error"):
+                return self.send_json(503, {"error": job["error"]})
+            return self.send_json(200, job["result"])
+        self.send_json(404, {"error": "not found"})
+
+    def do_POST(self):  # noqa: N802
+        command = self.path.rsplit("/", 1)[-1]
+        if command not in ("heartbeat",):
+            return self.send_json(404, {"error": "not found"})
+        job = {"command": command, "done": threading.Event()}
+        _control_queue.put(job)
+        if not job["done"].wait(10):
+            return self.send_json(504, {"error": "control queue timeout"})
+        if job.get("error"):
+            return self.send_json(503, {"error": job["error"]})
+        self.send_json(200, job["result"])
+
+
+def start_control_server():
+    worker = threading.Thread(target=control_worker, name="mesh-control-worker", daemon=True)
+    worker.start()
+    server = ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("CONTROL_PORT", "8765"))), ControlHandler)
+    thread = threading.Thread(target=server.serve_forever, name="mesh-control-api", daemon=True)
+    thread.start()
+    log("Control API listening on 127.0.0.1:%s" % server.server_port)
+    return server
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def system_prompt():
+    """Load the agent identity/policy, allowing it to be edited without code changes."""
+    try:
+        with open(AI_SYSTEM_PROMPT_FILE) as f:
+            prompt = f.read().strip()
+        if prompt:
+            return prompt
+    except OSError:
+        pass
+    return AI_SYSTEM_PROMPT
+
+
+def retrieve_context(query):
+    """Fetch small, source-labeled snippets on explicit wiki/weather/news requests."""
+    if not WEB_RETRIEVAL_ENABLED:
+        return ""
+    normalized = re.sub(r"\s+", " ", query.strip())
+    lower = normalized.lower()
+    command, _, value = normalized.partition(" ")
+    value = value.strip()
+
+    # Support both explicit commands and natural requests over the mesh.
+    weather_match = re.search(
+        r"(?:weather|forecast|temperature)\s+(?:in|for|at)\s+(.+?)(?:\s+(?:right now|now|rn|today|tonight))?$",
+        normalized, re.IGNORECASE,
+    )
+    if weather_match:
+        command, value = "weather", weather_match.group(1).strip()
+    elif re.search(r"\b(weather|forecast|temperature)\b", lower):
+        command, value = "weather", ""
+
+    if re.search(r"\b(news|headlines|current events)\b", lower):
+        command = "news"
+        value = re.sub(r"\b(give me|show me|what is|what's|the|some|latest|current|local|news|headlines|current events)\b", " ", normalized, flags=re.IGNORECASE)
+        value = re.sub(r"\s+", " ", value).strip()
+
+    wiki_match = re.search(r"(?:wiki|wikipedia)\s+(?:about\s+|on\s+)?(.+)$", normalized, re.IGNORECASE)
+    if wiki_match:
+        command, value = "wiki", wiki_match.group(1).strip()
+    try:
+        if command.lower() in ("wiki", "wikipedia") and value:
+            search = requests.get(
+                "https://en.wikipedia.org/w/rest.php/v1/search/page",
+                params={"q": value, "limit": 1}, timeout=8,
+            )
+            search.raise_for_status()
+            pages = search.json().get("pages", [])
+            if pages:
+                title = pages[0].get("title", value)
+                summary = requests.get(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title)}",
+                    headers={"User-Agent": HTTP_USER_AGENT}, timeout=8,
+                )
+                summary.raise_for_status()
+                data = summary.json()
+                return f"SOURCE: Wikipedia\nTITLE: {data.get('title', title)}\n{data.get('extract', '')[:2500]}"
+        if command.lower() == "weather":
+            location = value or DEFAULT_WEATHER_LOCATION
+            if not location:
+                return "No weather location configured. Ask with: weather <city or ZIP>."
+            weather = requests.get(
+                f"https://wttr.in/{quote_plus(location)}",
+                params={"format": "3"}, headers={"User-Agent": HTTP_USER_AGENT}, timeout=8,
+            )
+            weather.raise_for_status()
+            return f"SOURCE: wttr.in\n{weather.text.strip()}"
+        if command.lower() == "news":
+            topic = value or DEFAULT_NEWS_TOPIC
+            if not topic:
+                return "No news topic configured. Ask with: news <topic>."
+            rss = requests.get(
+                "https://news.google.com/rss/search",
+                params={"q": topic, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                headers={"User-Agent": HTTP_USER_AGENT}, timeout=8,
+            )
+            rss.raise_for_status()
+            titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", rss.text)
+            if not titles:
+                titles = re.findall(r"<title>(.*?)</title>", rss.text)
+            return "SOURCE: Google News RSS\n" + "\n".join(titles[1:6])
+    except (requests.RequestException, ValueError) as exc:
+        return f"RETRIEVAL ERROR: {exc}"
+    return ""
 
 
 def read_live_model():
@@ -103,7 +310,7 @@ def ask_ai(prompt):
     payload = {
         "model": read_live_model(),
         "messages": [
-            {"role": "system", "content": AI_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt()},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": AI_MAX_TOKENS,
@@ -115,14 +322,21 @@ def ask_ai(prompt):
     return data["choices"][0]["message"]["content"].strip()
 
 
-def send_chunks(interface, text, destination_id=None):
+def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0):
     """Send a text reply, splitting into Meshtastic-sized chunks."""
     text = text.strip()
     if not text:
         return
     while text:
         chunk, text = text[:REPLY_MAX_CHARS], text[REPLY_MAX_CHARS:]
-        interface.sendText(chunk, destinationId=destination_id, wantAck=False)
+        with _mesh_io_lock:
+            interface.sendText(
+                chunk,
+                destinationId=destination_id,
+                channelIndex=channel_index,
+                wantAck=False,
+            )
+        log(f"Sent reply chunk to {destination_id or 'broadcast'} ({len(chunk)} chars)")
         time.sleep(1)
 
 
@@ -152,16 +366,26 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
     if not sender:
         return
 
+    log(f"Received text packet from {sender} to {packet.get('to')}: {text[:120]!r}")
+
     if ensure_my_id(interface) and _my_id and sender == _my_id:
         return  # ignore our own echoed replies
 
     to = packet.get("to")
     if to == BROADCAST_ADDR:
-        if not REPLY_TO_BROADCAST:
+        if not REPLY_TO_BROADCAST or not text.lower().startswith(BOT_PREFIX.lower()):
+            log(f"Ignored channel message: missing prefix {BOT_PREFIX!r}")
             return
-        destination_id = None  # broadcast to the channel
+        # The library requires the numeric broadcast address. None triggers
+        # its CLI-style sys.exit path and silently loses the reply.
+        destination_id = BROADCAST_ADDR
+        channel_index = int(packet.get("channel", 0) or 0)
+        text = text[len(BOT_PREFIX):].strip()
+        if not text:
+            return
     else:
         destination_id = sender  # direct message to the node
+        channel_index = int(packet.get("channel", 0) or 0)
 
     with _lock:
         if sender in _inflight:
@@ -170,11 +394,20 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
 
     try:
         try:
-            reply = ask_ai(text)
+            retrieved = retrieve_context(text)
+            prompt = text
+            if retrieved:
+                prompt = f"User request: {text}\n\nRetrieved context:\n{retrieved}"
+            log(f"Asking model {read_live_model()} for {sender}")
+            reply = ask_ai(prompt)
         except Exception as exc:  # surface API errors over the mesh
+            log(f"AI request failed for {sender}: {exc}")
             reply = f"AI error: {exc}"
         log_interaction(sender, text, reply)
-        send_chunks(interface, reply, destination_id)
+        try:
+            send_chunks(interface, reply, destination_id, channel_index)
+        except Exception as exc:
+            log(f"Reply send failed for {sender}: {exc}")
     finally:
         with _lock:
             _inflight.discard(sender)
@@ -186,6 +419,7 @@ def on_connection(interface, topic=pub.AUTO_TOPIC):  # pylint: disable=unused-ar
 
 
 def main():
+    global _interface
     pub.subscribe(on_receive, "meshtastic.receive")
     pub.subscribe(on_connection, "meshtastic.connection.established")
 
@@ -197,13 +431,31 @@ def main():
         except TypeError:
             interface = TCPInterface(hostname=MESHTASTIC_HOST)
 
+    _interface = interface
+    control_server = start_control_server()
     log(f"Bridge started. Connected to {CONN_DESC}.")
     try:
+        last_heartbeat = 0.0
         while True:
             time.sleep(1)
+            # Some Wi-Fi nodes close otherwise-idle TCP API sessions before
+            # the library's default five-minute heartbeat. Keep this session
+            # alive more frequently so incoming mesh packets continue to be
+            # delivered to the bridge.
+            now = time.monotonic()
+            if now - last_heartbeat >= 30 and hasattr(interface, "sendHeartbeat"):
+                interface.sendHeartbeat()
+                last_heartbeat = now
+            # TCPInterface's reader can terminate after a node reboot or Wi-Fi
+            # interruption while the Python process remains alive.  Let
+            # systemd restart us so the interface is recreated and subscribed
+            # to packets again instead of silently running without a reader.
+            if hasattr(interface, "isConnected") and not interface.isConnected.is_set():
+                raise RuntimeError(f"Meshtastic connection lost: {CONN_DESC}")
     except KeyboardInterrupt:
         pass
     finally:
+        control_server.shutdown()
         interface.close()
 
 

@@ -11,10 +11,13 @@ set -euo pipefail
 
 ENV_FILE="${1:-/opt/meshtastic-ai-bridge/.env}"
 M="${MESHTASTIC_BIN:-/opt/meshtastic-ai-bridge/venv/bin/meshtastic}"
-HOST="${MESHTASTIC_HOST:-localhost}"
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
+
+# Prefer the .env value; fall back to the process environment, then localhost.
+HOST="$(get MESHTASTIC_HOST)"
+[[ -n "$HOST" ]] || HOST="${MESHTASTIC_HOST:-localhost}"
 
 # Target either meshtasticd over TCP (default) or a standalone serial node.
 if [[ "$(get MESHTASTIC_CONNECTION)" == "serial" ]]; then

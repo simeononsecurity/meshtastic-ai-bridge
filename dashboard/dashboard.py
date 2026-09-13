@@ -8,6 +8,8 @@ ollama. Binds 0.0.0.0 by default for LAN access; see DASHBOARD_HOST/DASHBOARD_PO
 import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
 
 from flask import Flask, jsonify, render_template, request
 
@@ -17,8 +19,7 @@ INSTALL_DIR = os.environ.get("INSTALL_DIR", "/opt/meshtastic-ai-bridge")
 ENV_FILE = os.path.join(INSTALL_DIR, ".env")
 RESPONSES_LOG = os.path.join(INSTALL_DIR, "responses.jsonl")
 LIVE_CONFIG = os.path.join(INSTALL_DIR, "live_config.json")
-MESHTASTIC = os.path.join(INSTALL_DIR, "venv", "bin", "meshtastic")
-CONFIGURE_SCRIPT = os.path.join(INSTALL_DIR, "scripts", "configure_mesh.sh")
+CONTROL_URL = os.environ.get("BRIDGE_CONTROL_URL", "http://127.0.0.1:8765")
 
 SERVICES = ["meshtasticd", "meshtastic-ai-bridge", "ollama"]
 ACTIONS = {"start", "stop", "restart"}
@@ -44,6 +45,16 @@ def env_value(name, default=""):
     except Exception:
         pass
     return default
+
+
+def bridge_control(path="/snapshot", method="GET"):
+    """Query the bridge-owned control API; never open a second mesh session."""
+    req = urllib.request.Request(CONTROL_URL + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            return json.loads(response.read().decode())
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return {"connected": False, "error": str(exc)}
 
 
 def read_live_config():
@@ -79,11 +90,14 @@ def api_status():
     for s in SERVICES:
         r = sh(f"systemctl is-active {s}")
         services.append({"name": s, "state": (r["out"].strip() or "unknown")})
-    mesh = sh(f"{MESHTASTIC} --host localhost --info 2>&1", timeout=30)
+    mesh = bridge_control()
     return jsonify({
         "services": services,
         "model": active_model(),
-        "mesh_reachable": mesh["rc"] == 0,
+        "mesh_reachable": mesh.get("connected", False),
+        "mesh": mesh,
+        "bot_prefix": env_value("BOT_PREFIX", "!bot"),
+        "retrieval_enabled": env_value("WEB_RETRIEVAL_ENABLED", "false"),
     })
 
 
@@ -143,19 +157,31 @@ def api_pull_model():
 @app.route("/api/mesh")
 def api_mesh():
     cmd = request.args.get("cmd", "info")
-    if cmd not in ("info", "nodes", "channels", "position"):
+    if cmd not in ("info", "nodes", "channels"):
         return jsonify({"ok": False, "error": "bad cmd"}), 400
-    r = sh(f"{MESHTASTIC} --host localhost --{cmd} 2>&1", timeout=30)
-    return jsonify({"ok": r["rc"] == 0, "text": r["out"]})
+    snapshot = bridge_control()
+    if snapshot.get("error"):
+        return jsonify({"ok": False, "text": snapshot["error"]}), 503
+    if cmd == "nodes":
+        data = snapshot.get("nodes", {})
+    elif cmd == "channels":
+        data = snapshot.get("channels", [])
+    else:
+        data = snapshot
+    return jsonify({"ok": True, "data": data, "text": json.dumps(data, indent=2)})
 
 
 @app.route("/api/apply", methods=["POST"])
 def api_apply():
-    """Re-run configure_mesh.sh to push .env settings to the node."""
-    if not os.path.exists(CONFIGURE_SCRIPT):
-        return jsonify({"ok": False, "text": "configure_mesh.sh not installed"}), 500
-    r = sh(f"bash {CONFIGURE_SCRIPT} {ENV_FILE} 2>&1", timeout=120)
-    return jsonify({"ok": r["rc"] == 0, "text": r["out"]})
+    """Avoid opening a second Meshtastic client from the dashboard.
+
+    Configuration writes will be routed through the bridge control queue in a
+    later endpoint. The old shell script is intentionally not invoked here.
+    """
+    return jsonify({
+        "ok": False,
+        "text": "Configuration apply is temporarily disabled to protect the single bridge-owned TCP session.",
+    }), 409
 
 
 if __name__ == "__main__":

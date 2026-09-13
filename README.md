@@ -208,14 +208,14 @@ its API/TCP server enabled).
 1. Confirm the node's TCP API is reachable from the Pi:
 
    ```bash
-   meshtastic --host 192.168.5.99 --info
+   meshtastic --host <node-ip> --info
    ```
 
 2. Point the bridge at it in `.env`:
 
    ```dotenv
    MESHTASTIC_CONNECTION=tcp
-   MESHTASTIC_HOST=192.168.5.99
+   MESHTASTIC_HOST=<node-ip>
    MESHTASTIC_PORT=4403
    ```
 
