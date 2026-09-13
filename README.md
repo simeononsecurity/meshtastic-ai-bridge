@@ -284,11 +284,12 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `SENSOR_URL` | empty | Optional local JSON sensor adapter endpoint |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
 | `AI_MAX_TOKENS` | `220` | Max generated tokens; truncated answers receive a short continuation |
+| `AI_COMPLETION_ATTEMPTS` | `3` | Maximum completion/continuation attempts before an incomplete answer is discarded |
 | `AI_QUEUE_MAX` | `8` | Maximum queued AI requests |
 | `PACKET_DEDUPE_SECONDS` | `120` | Duplicate packet suppression window |
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
 | `REPLY_TO_BROADCAST` | `false` | Also answer channel broadcasts |
-| `REPLY_MAX_CHARS` | `180` | Maximum chunk size; split at word boundaries |
+| `REPLY_MAX_CHARS` | `180` | Maximum chunk size; prefer sentence boundaries, then words |
 | `REPLY_CHANNELS` | empty | Optional comma-separated channel allowlist |
 | `REPLY_ON_LONGFAST` | `false` | Permit replies when channel 0 is named LongFast |
 | `CHUNK_DELAY_SECONDS` | `1.0` | Delay between reply chunks |

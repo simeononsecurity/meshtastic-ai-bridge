@@ -56,6 +56,7 @@ AI_SYSTEM_PROMPT = os.environ.get(
 )
 AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", "300"))
 AI_TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.7"))
+AI_COMPLETION_ATTEMPTS = int(os.environ.get("AI_COMPLETION_ATTEMPTS", "3"))
 AI_QUEUE_MAX = int(os.environ.get("AI_QUEUE_MAX", "8"))
 PACKET_DEDUPE_SECONDS = int(os.environ.get("PACKET_DEDUPE_SECONDS", "120"))
 AI_QUEUE_TIMEOUT_SECONDS = int(os.environ.get("AI_QUEUE_TIMEOUT_SECONDS", "180"))
@@ -636,48 +637,62 @@ def log_interaction(sender, prompt, reply):
 
 
 def ask_ai(prompt):
-    """Call an OpenAI-compatible chat completions endpoint."""
+    """Call an OpenAI-compatible endpoint and never return a dangling answer."""
     url = f"{AI_API_BASE}/chat/completions"
     headers = {}
     if AI_API_KEY:
         headers["Authorization"] = f"Bearer {AI_API_KEY}"
-    payload = {
-        "model": read_live_model(),
-        "messages": [
-            {"role": "system", "content": system_prompt()},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": AI_MAX_TOKENS,
-        "temperature": AI_TEMPERATURE,
-    }
-    resp = requests.post(url, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    choice = data["choices"][0]
-    answer = choice["message"]["content"].strip()
-    # Small local models can hit the token ceiling mid-sentence. Ask for a
-    # short continuation rather than sending an answer that ends abruptly.
-    if choice.get("finish_reason") == "length" and answer:
-        continuation_payload = {
+    messages = [
+        {"role": "system", "content": system_prompt()},
+        {"role": "user", "content": prompt},
+    ]
+    answer = ""
+    for attempt in range(max(1, AI_COMPLETION_ATTEMPTS)):
+        payload = {
             "model": read_live_model(),
-            "messages": [
-                {"role": "system", "content": system_prompt()},
-                {"role": "user", "content": (
-                    "Continue this answer from the last complete idea. Do not repeat text. "
-                    "Use at most two short sentences and finish cleanly.\n\n" + answer
-                )},
-            ],
-            "max_tokens": min(80, AI_MAX_TOKENS),
+            "messages": messages,
+            "max_tokens": AI_MAX_TOKENS if attempt == 0 else min(120, AI_MAX_TOKENS),
             "temperature": AI_TEMPERATURE,
         }
-        continuation = requests.post(
-            url, headers=headers, json=continuation_payload, timeout=120,
-        )
-        continuation.raise_for_status()
-        extra = continuation.json()["choices"][0]["message"]["content"].strip()
-        if extra:
-            answer = f"{answer} {extra}"
-    return answer
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        resp.raise_for_status()
+        choice = resp.json()["choices"][0]
+        piece = choice["message"]["content"].strip()
+        if not piece:
+            break
+        answer = f"{answer} {piece}".strip() if answer else piece
+        if choice.get("finish_reason") != "length" and not _looks_incomplete(answer):
+            return answer
+        messages = [
+            {"role": "system", "content": system_prompt()},
+            {"role": "user", "content": (
+                "Continue the answer below without repeating any text. Complete the "
+                "unfinished sentence or thought, then end with a final sentence. "
+                "Do not add commentary about continuing.\n\n" + answer
+            )},
+        ]
+    if answer and not _looks_incomplete(answer):
+        return answer
+    log(f"Discarding incomplete model response after {AI_COMPLETION_ATTEMPTS} attempts")
+    return "I could not complete that answer. Please ask again."
+
+
+def _looks_incomplete(text):
+    """Detect common model-limit endings without rejecting normal abbreviations."""
+    value = re.sub(r"\s+", " ", text.strip())
+    if not value:
+        return True
+    if value.endswith((":", ",", ";", "-", "—", "(/", "(")):
+        return True
+    if re.search(r"\b(and|or|but|because|which|that|to|of|with|for|from|the|a|an|is|are|in|on)\s*$", value, re.I):
+        return True
+    if value.count("(") > value.count(")") or value.count("[") > value.count("]"):
+        return True
+    if re.search(r"[.!?][\"'\)\]]*$", value):
+        return False
+    # A model may report stop without punctuation. Treat that as incomplete;
+    # the bridge must continue it or send the complete fallback below.
+    return True
 
 
 def _delivery_callback(destination_id, channel_index, packet_id):
@@ -700,7 +715,16 @@ def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0)
         if len(text) <= REPLY_MAX_CHARS:
             chunk, text = text, ""
         else:
-            split_at = text.rfind(" ", 0, REPLY_MAX_CHARS + 1)
+            boundary = max(40, REPLY_MAX_CHARS // 2)
+            candidates = [
+                text.rfind(mark, boundary, REPLY_MAX_CHARS + 1)
+                for mark in (". ", "! ", "? ", "\n\n", "\n")
+            ]
+            split_at = max(candidates)
+            if split_at > 0:
+                split_at += 1 if text[split_at] in ".!?" else 0
+            else:
+                split_at = text.rfind(" ", 0, REPLY_MAX_CHARS + 1)
             if split_at < max(40, REPLY_MAX_CHARS // 2):
                 split_at = REPLY_MAX_CHARS
             chunk, text = text[:split_at].rstrip(), text[split_at:].lstrip()
