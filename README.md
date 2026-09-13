@@ -107,6 +107,10 @@ meshtasticd's own `/etc/meshtasticd/available.d/` instead:
 sudo ./setup.sh --preset lora-Adafruit-RFM9x
 ```
 
+Additional presets ship in `meshtasticd/config.d/` (see its README): **RAK13302**
+for the 13302 module and the **MeshStick** USB radio. The **MeshTadpole** USB
+radio needs no preset, since its onboard EEPROM auto-configures meshtasticd 2.6.5+.
+
 ## Configuration
 
 All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env`:
@@ -173,7 +177,7 @@ setup.sh                           one-line installer
 bridge/bridge.py                   Meshtastic <-> AI daemon
 bridge/requirements.txt            Python deps
 bridge/.env.example                configuration template
-meshtasticd/config.d/              RAK13300 slot presets (lora-RAK13300-slot1/2.yaml)
+meshtasticd/config.d/              radio presets (RAK13300 / RAK13302 / MeshStick) + README
 meshtasticd/config.yaml.example    optional Web server settings
 systemd/meshtastic-ai-bridge.service
 ```

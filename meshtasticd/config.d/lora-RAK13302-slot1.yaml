@@ -1,0 +1,23 @@
+# RAK13302 (Semtech SX1262) LoRa module in Slot 1 of the RAK6421 base board.
+# Same pinout as the RAK13300, with a per-module TX gain table.
+# Source: meshtastic/firmware bin/config.d/lora-RAK6421-13302-slot1.yaml
+Meta:
+  name: RAK6421 + RAK13302 Slot 1
+  support: official
+  compatible:
+    - raspberry-pi
+
+Lora:
+  Module: sx1262
+  IRQ: 22      # IO6
+  Reset: 16    # IO4
+  Busy: 24     # IO5
+  # Ant_sw: 13 # IO3
+  Enable_Pins:
+    - 12
+    - 13
+  DIO3_TCXO_VOLTAGE: true
+  DIO2_AS_RF_SWITCH: true
+  spidev: spidev0.0
+  # CS: 8
+  TX_GAIN_LORA: [9, 9, 10, 11, 9, 8, 9, 10, 10, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 10, 9, 8]
