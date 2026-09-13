@@ -92,6 +92,17 @@ _interface = None
 _control_queue = queue.Queue()
 _ai_queue = queue.Queue(maxsize=AI_QUEUE_MAX)
 _ai_active = False
+_health = {
+    "started_at": time.time(),
+    "last_packet_at": None,
+    "last_reply_at": None,
+    "last_delivery": None,
+    "received_packets": 0,
+    "ignored_packets": 0,
+    "duplicate_packets": 0,
+    "queued_requests": 0,
+    "queue_rejections": 0,
+}
 
 
 def _jsonable(value):
@@ -122,6 +133,25 @@ def mesh_snapshot():
             "channels": getattr(interface, "_localChannels", None) or [],
             "queue_depth": _control_queue.qsize(),
         })
+
+
+def health_snapshot():
+    """Return compact operational state without dumping node data or secrets."""
+    interface = _interface
+    with _lock:
+        state = dict(_health)
+        state["queue_depth"] = _ai_queue.qsize()
+        state["ai_active"] = _ai_active
+    state.update({
+        "bridge": "ready",
+        "meshtastic": "connected" if interface and interface.isConnected.is_set() else "offline",
+        "model": read_live_model(),
+        "connection": CONN_DESC,
+        "node_id": _my_id,
+        "broadcast_replies": REPLY_TO_BROADCAST,
+        "bot_prefix": BOT_PREFIX,
+    })
+    return state
 
 
 def run_control_job(command):
@@ -164,7 +194,9 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802
-        if self.path in ("/health", "/snapshot"):
+        if self.path == "/health":
+            return self.send_json(200, health_snapshot())
+        if self.path == "/snapshot":
             job = {"command": "snapshot", "done": threading.Event()}
             _control_queue.put(job)
             if not job["done"].wait(10):
@@ -222,15 +254,17 @@ def ai_worker():
                 prompt = f"User request: {text}\n\nRetrieved context:\n{retrieved}"
             log(f"Asking model {read_live_model()} for {sender} (queue={_ai_queue.qsize()})")
             try:
-                reply = ask_ai(prompt)
+                reply = deterministic_command(text) or ask_ai(prompt)
             except Exception as exc:  # surface API errors over the mesh
                 log(f"AI request failed for {sender}: {exc}")
                 reply = f"AI error: {exc}"
             log_interaction(sender, text, reply)
             try:
                 send_chunks(interface, reply, job["destination"], job["channel"])
+                with _lock:
+                    _health["last_reply_at"] = time.time()
             except Exception as exc:
-                log(f"Reply send failed for {sender}: {exc}")
+                log(f"Reply send failed for {sender}: {classify_delivery_error(exc)}")
         finally:
             with _lock:
                 _ai_active = False
@@ -239,6 +273,54 @@ def ai_worker():
 
 def log(msg):
     print(msg, flush=True)
+
+
+def deterministic_command(text):
+    """Return a stable low-airtime response for built-in commands."""
+    command = text.strip().lower()
+    if command in ("help", "what can you do", "commands"):
+        return (
+            "Commands: wiki <topic>; weather <city/ZIP>; news <topic>; "
+            "status. DMs need no prefix; channel requests need !bot."
+        )
+    if command in ("status", "health", "bot status"):
+        state = health_snapshot()
+        return (
+            f"Mesh {state['meshtastic']}; model {state['model']}; "
+            f"queue {state['queue_depth']}; replies "
+            f"{'on' if state['broadcast_replies'] else 'off'}."
+        )
+    return ""
+
+
+def classify_delivery_error(exc):
+    """Translate Meshtastic/library errors into useful radio diagnostics."""
+    message = str(exc)
+    upper = message.upper()
+    if "NO_CHANNEL" in upper:
+        return "delivery failed: no usable channel or channel key"
+    if "NO_ROUTE" in upper or "ROUTE" in upper:
+        return "delivery failed: no route to destination"
+    if "TIMEOUT" in upper or "ACK" in upper:
+        return "delivery failed: acknowledgement timeout"
+    if "BROKEN PIPE" in upper or "CONNECTION" in upper:
+        return "delivery failed: radio connection lost"
+    return f"delivery failed: {message[:100]}"
+
+
+def classify_delivery_response(packet):
+    """Classify a Meshtastic ACK/NAK callback without assuming one schema."""
+    text = str(packet or {})
+    upper = text.upper()
+    if "NO_CHANNEL" in upper:
+        return "nack_no_channel"
+    if "NO_ROUTE" in upper:
+        return "nack_no_route"
+    if "NAK" in upper or "ERROR" in upper or "FAILED" in upper:
+        return "nack"
+    if "ACK" in upper or "SUCCESS" in upper:
+        return "acknowledged"
+    return "delivery_response"
 
 
 def system_prompt():
@@ -412,6 +494,15 @@ def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0)
 
         def delivery_callback(packet):
             payload = packet or {}
+            with _lock:
+                _health["last_delivery"] = {
+                    "state": classify_delivery_response(payload),
+                    "packet_id": packet_ref["id"],
+                    "destination": destination_id,
+                    "channel": channel_index,
+                    "response": str(payload),
+                    "at": time.time(),
+                }
             log(
                 f"Delivery response packet={packet_ref['id']} destination={destination_id} "
                 f"channel={channel_index}: {payload}"
@@ -438,6 +529,14 @@ def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0)
         packet_id = getattr(packet, "id", None)
         packet_ref["id"] = packet_id
         delivery = "reliable direct; awaiting ACK/NAK" if direct else "broadcast; no delivery ACK"
+        with _lock:
+            _health["last_delivery"] = {
+                "state": "ack_pending" if direct else "broadcast_no_ack",
+                "packet_id": packet_id,
+                "destination": destination_id,
+                "channel": channel_index,
+                "at": time.time(),
+            }
         log(
             f"Queued reply packet={packet_id} destination={destination_id} "
             f"channel={channel_index} chars={len(chunk)} ({delivery})"
@@ -471,7 +570,15 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
     if not sender:
         return
 
-    log(f"Received text packet from {sender} to {packet.get('to')}: {text[:120]!r}")
+    packet_type = "broadcast" if packet.get("to") == BROADCAST_ADDR else "direct"
+    channel_index = int(packet.get("channel", 0) or 0)
+    with _lock:
+        _health["last_packet_at"] = time.time()
+        _health["received_packets"] += 1
+    log(
+        f"Received {packet_type} text from={sender} to={packet.get('to')} "
+        f"channel={channel_index}: {text[:120]!r}"
+    )
 
     if ensure_my_id(interface) and _my_id and sender == _my_id:
         return  # ignore our own echoed replies
@@ -479,6 +586,8 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
     to = packet.get("to")
     if to == BROADCAST_ADDR:
         if not REPLY_TO_BROADCAST or not text.lower().startswith(BOT_PREFIX.lower()):
+            with _lock:
+                _health["ignored_packets"] += 1
             log(f"Ignored channel message: missing prefix {BOT_PREFIX!r}")
             return
         # The library requires the numeric broadcast address. None triggers
@@ -500,6 +609,7 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         _seen_packets.update({key: timestamp for key, timestamp in _seen_packets.items()
                               if now - timestamp < PACKET_DEDUPE_SECONDS})
         if fingerprint in _seen_packets:
+            _health["duplicate_packets"] += 1
             log(f"Ignored duplicate text packet from {sender}")
             return
         _seen_packets[fingerprint] = now
@@ -515,12 +625,16 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         was_busy = _ai_active or not _ai_queue.empty()
     try:
         _ai_queue.put_nowait(job)
+        with _lock:
+            _health["queued_requests"] += 1
     except queue.Full:
+        with _lock:
+            _health["queue_rejections"] += 1
         log(f"AI queue full; rejecting request from {sender}")
         try:
             send_chunks(interface, "Busy - queue full; try again.", destination_id, channel_index)
         except Exception as exc:
-            log(f"Queue-full notice failed for {sender}: {exc}")
+            log(f"Queue-full notice failed for {sender}: {classify_delivery_error(exc)}")
         return
 
     if was_busy:
@@ -528,7 +642,7 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         try:
             send_chunks(interface, "Busy - request queued.", destination_id, channel_index)
         except Exception as exc:
-            log(f"Queue notice failed for {sender}: {exc}")
+            log(f"Queue notice failed for {sender}: {classify_delivery_error(exc)}")
 
 
 def on_connection(interface, topic=pub.AUTO_TOPIC):  # pylint: disable=unused-argument

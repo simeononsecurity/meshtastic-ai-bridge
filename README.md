@@ -81,6 +81,9 @@ answered. Useful examples include:
 !bot news <topic>
 ```
 
+The built-in `help` and `status` commands are deterministic and do not use the
+AI model. `status` reports compact mesh, model, queue, and broadcast state.
+
 The offline knowledge bundles are reference material, not a substitute for a
 doctor, emergency service, electrician, or other qualified professional. Ask
 for a source when accuracy matters, and treat medical or emergency answers as
@@ -236,6 +239,8 @@ Direct replies use Meshtastic reliable delivery with ACK/NAK tracking. Broadcast
 replies are logged as queued transmissions because a broadcast has no single
 recipient from which to request a delivery acknowledgement. Bridge logs include
 the packet ID, destination, channel, and delivery response when available.
+The local health endpoint at `http://127.0.0.1:8765/health` reports structured
+receive, queue, reply, and delivery state without exposing node data or secrets.
 | `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
 | `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
 | `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |
