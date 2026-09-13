@@ -29,7 +29,7 @@ MESHTASTIC_PORT = int(os.environ.get("MESHTASTIC_PORT", "4403"))
 
 AI_API_BASE = os.environ.get("AI_API_BASE", "http://127.0.0.1:11434/v1").rstrip("/")
 AI_API_KEY = os.environ.get("AI_API_KEY", "ollama")
-AI_MODEL = os.environ.get("AI_MODEL", "qwen2.5:1.5b-instruct-q4_K_M")
+AI_MODEL = os.environ.get("AI_MODEL", "qwen3.5:0.8b")
 AI_SYSTEM_PROMPT = os.environ.get(
     "AI_SYSTEM_PROMPT",
     "You answer over low-bandwidth mesh radio. Be accurate and concise.",

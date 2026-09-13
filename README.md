@@ -43,7 +43,7 @@ sudo ./setup.sh --lora-slot 2
 
    ```bash
    curl -fsSL https://ollama.com/install.sh | sh
-   ollama pull qwen2.5:1.5b-instruct-q4_K_M
+   ollama pull qwen3.5:0.8b
    ```
 
 2. Edit the AI settings if needed (the defaults already point at Ollama):
@@ -121,7 +121,7 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `MESHTASTIC_PORT` | `4403` | meshtasticd TCP API port |
 | `AI_API_BASE` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `AI_API_KEY` | `ollama` | API key (any string for a local server) |
-| `AI_MODEL` | `qwen2.5:1.5b-instruct-q4_K_M` | Model name |
+| `AI_MODEL` | `qwen3.5:0.8b` | Model name |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
 | `AI_MAX_TOKENS` | `300` | Max reply length |
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
@@ -135,17 +135,17 @@ on the same Pi. Install it and pull the model:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:1.5b-instruct-q4_K_M
+ollama pull qwen3.5:0.8b
 ```
 
 Pick a model sized for your Pi 4B RAM:
 
 | Model | ~Size | Pi 4 RAM | Use |
 |-------|-------|----------|-----|
-| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | Best starting point |
+| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | **Default** (best starting point) |
 | `lfm2.5:1.2b-instruct` | ~0.7 GB | 2-4 GB+ | Efficiency experiment |
 | `llama3.2:1b-instruct-q4_K_M` | ~0.7 GB | 2-4 GB+ | Comparison model |
-| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | **Safe default** |
+| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | Safe mature choice |
 | `qwen3:1.7b-instruct-q4_K_M` | ~1.4 GB | 4 GB+ | Higher-quality experiment |
 | `qwen2.5:3b-instruct-q4_K_M` | ~1.8 GB | 8 GB | Upper-end experiment |
 
