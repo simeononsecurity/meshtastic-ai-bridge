@@ -158,6 +158,42 @@ if [[ -n "$ADMIN_KEY" ]]; then
   fi
 fi
 
+echo "==> [7/7] Configuring MQTT (off by default)"
+MQTT_ENABLED="$(sed -n 's/^MQTT_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+if [[ "$MQTT_ENABLED" == "true" || "$MQTT_ENABLED" == "1" || "$MQTT_ENABLED" == "yes" ]]; then
+  MQTT_ARGS=(--set mqtt.enabled true)
+  MQTT_ADDR="$(sed -n 's/^MQTT_ADDRESS=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_USER="$(sed -n 's/^MQTT_USERNAME=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_PASS="$(sed -n 's/^MQTT_PASSWORD=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_ROOT="$(sed -n 's/^MQTT_ROOT=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_TLS="$(sed -n 's/^MQTT_TLS_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_ENC="$(sed -n 's/^MQTT_ENCRYPTION_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+  MQTT_JSON="$(sed -n 's/^MQTT_JSON_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
+
+  [[ -n "$MQTT_ADDR" ]] && MQTT_ARGS+=(--set mqtt.address "$MQTT_ADDR")
+  [[ -n "$MQTT_USER" ]] && MQTT_ARGS+=(--set mqtt.username "$MQTT_USER")
+  [[ -n "$MQTT_PASS" ]] && MQTT_ARGS+=(--set mqtt.password "$MQTT_PASS")
+  [[ -n "$MQTT_ROOT" ]] && MQTT_ARGS+=(--set mqtt.root "$MQTT_ROOT")
+  [[ -n "$MQTT_TLS" ]] && MQTT_ARGS+=(--set mqtt.tls_enabled "$MQTT_TLS")
+  [[ -n "$MQTT_ENC" ]] && MQTT_ARGS+=(--set mqtt.encryption_enabled "$MQTT_ENC")
+  [[ -n "$MQTT_JSON" ]] && MQTT_ARGS+=(--set mqtt.json_enabled "$MQTT_JSON")
+
+  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost "${MQTT_ARGS[@]}" >/dev/null 2>&1; then
+    echo "    Applied MQTT (server: ${MQTT_ADDR:-default})."
+  else
+    echo "!   Could not apply MQTT. After meshtasticd is up, run:"
+    echo "    $INSTALL_DIR/venv/bin/meshtastic --host localhost ${MQTT_ARGS[*]}"
+  fi
+
+  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost --ch-set uplink_enabled true --ch-set downlink_enabled true >/dev/null 2>&1; then
+    echo "    Enabled channel uplink + downlink."
+  else
+    echo "!   Could not enable channel uplink/downlink. Manually: meshtastic --host localhost --ch-set uplink_enabled true --ch-set downlink_enabled true"
+  fi
+else
+  echo "    MQTT disabled. Set MQTT_ENABLED=true and MQTT_ADDRESS in .env to enable."
+fi
+
 systemctl restart meshtastic-ai-bridge || true
 
 cat <<EOF

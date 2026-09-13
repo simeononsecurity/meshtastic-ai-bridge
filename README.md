@@ -151,6 +151,21 @@ Pick a model sized for your Pi 4B RAM:
 
 Tag names change over time, so confirm with `ollama search <name>` before pulling.
 
+### MQTT (optional, off by default)
+
+meshtasticd can bridge the mesh to an MQTT broker over the Pi's internet
+connection. It is disabled by default. To enable it, set in `.env`:
+
+```dotenv
+MQTT_ENABLED=true
+MQTT_ADDRESS=your-broker.example
+```
+
+Optionally set `MQTT_USERNAME` / `MQTT_PASSWORD`, or flip `MQTT_TLS_ENABLED`,
+`MQTT_ENCRYPTION_ENABLED`, and `MQTT_JSON_ENABLED`. The installer applies these
+to meshtasticd and enables channel uplink/downlink so packets flow to and from
+the broker.
+
 ## Managing Services
 
 ```bash
