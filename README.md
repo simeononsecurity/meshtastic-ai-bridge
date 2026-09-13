@@ -73,11 +73,16 @@ sudo ./setup.sh --lora-slot 2
 | **bridge.py** | Connects to meshtasticd over TCP, watches for `TEXT_MESSAGE_APP`, calls the AI API, and posts the reply back. |
 | **systemd** | Keeps both `meshtasticd.service` and `meshtastic-ai-bridge.service` running across reboots. |
 
-The bridge uses the Meshtastic Python library. By default it connects to the
-local daemon with `TCPInterface`; set `MESHTASTIC_CONNECTION=serial` to connect
-to a standalone node over USB with `SerialInterface` instead (see "Standalone
-serial node" below). Long replies are split into Meshtastic-sized chunks
-automatically.
+The bridge uses the Meshtastic Python library. Three connection modes are
+supported:
+
+| Mode | `.env` | Connects to |
+|------|--------|-------------|
+| Local daemon (default) | `MESHTASTIC_CONNECTION=tcp`, `MESHTASTIC_HOST=localhost` | meshtasticd on this Pi (TCP 4403) |
+| **Remote TCP node** | `MESHTASTIC_CONNECTION=tcp`, `MESHTASTIC_HOST=<node-ip>` | a Meshtastic device exposing its API on TCP 4403 (WiFi node or remote meshtasticd) |
+| USB serial node | `MESHTASTIC_CONNECTION=serial`, `MESHTASTIC_SERIAL_PORT=/dev/ttyACM0` | a standalone node over USB CDC (RAK4631 / RAK4630 / RAK19713) |
+
+Long replies are split into Meshtastic-sized chunks automatically.
 
 ### Radio module (RAK13300 / SX1262)
 
@@ -191,6 +196,44 @@ Example with a short-range preset plus two custom channels:
 LORA_MODEM_PRESET=SHORT_FAST
 CHANNELS_EXTRA=Work:<base64-key>:SECONDARY;Family:<base64-key>:SECONDARY
 ```
+
+## Remote TCP Node (WiFi device or remote meshtasticd)
+
+The bridge can also talk to a Meshtastic node over the network instead of USB
+or a local daemon. Any node that exposes the Meshtastic **TCP API on port
+4403** works: a meshtasticd daemon on another machine, or a WiFi-connected
+device (for example an ESP32 joined to your network with WiFi client mode and
+its API/TCP server enabled).
+
+1. Confirm the node's TCP API is reachable from the Pi:
+
+   ```bash
+   meshtastic --host 192.168.5.99 --info
+   ```
+
+2. Point the bridge at it in `.env`:
+
+   ```dotenv
+   MESHTASTIC_CONNECTION=tcp
+   MESHTASTIC_HOST=192.168.5.99
+   MESHTASTIC_PORT=4403
+   ```
+
+3. Restart the bridge:
+
+   ```bash
+   sudo systemctl restart meshtastic-ai-bridge
+   ```
+
+Notes:
+
+- `MESHTASTIC_CONNECTION=tcp` with `MESHTASTIC_HOST=localhost` is the default
+  local-daemon setup; only `MESHTASTIC_HOST` changes for a remote node.
+- The device must have WiFi (client mode) and its API/TCP server enabled first;
+  see the Meshtastic [configuration docs](https://meshtastic.org/docs/configuration/).
+- Only the primary node's traffic reaches the bridge, so point it at whichever
+  node acts as your mesh gateway. Multiple bridges can share one node, but each
+  bridge should use a distinct local identity if they answer on the same mesh.
 
 ## Standalone Serial Node (RAK4630 / RAK19713)
 
