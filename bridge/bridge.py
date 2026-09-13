@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Meshtastic <-> AI bridge.
 
-Connects to the local meshtasticd node over TCP (port 4403) and answers text
-messages using any OpenAI-compatible chat API. Direct messages to the node get
-an AI reply; broadcast channel messages are ignored unless REPORT_TO_BROADCAST
-is enabled in the environment.
+Answers text messages using any OpenAI-compatible chat API. Direct messages to
+the node get an AI reply; broadcast channel messages are ignored unless
+REPORT_TO_BROADCAST is enabled in the environment.
+
+Two connection types are supported, selected by MESHTASTIC_CONNECTION:
+  - "tcp"    (default) a meshtasticd daemon on the same machine (port 4403)
+  - "serial" a standalone Meshtastic node over USB serial (e.g. a RAK4631 /
+             RAK4630 / RAK19713 running Meshtastic, exposed as /dev/ttyACM0)
 
 Configure via environment (see .env.example). The OpenAI-compatible endpoint
 works with OpenAI, Ollama, LM Studio, vLLM, Groq, OpenRouter, and others.
@@ -19,6 +23,7 @@ import requests
 from dotenv import load_dotenv
 from pubsub import pub
 from meshtastic.tcp_interface import TCPInterface
+from meshtastic.serial_interface import SerialInterface
 
 load_dotenv()
 
@@ -26,6 +31,13 @@ BROADCAST_ADDR = 0xFFFFFFFF
 
 MESHTASTIC_HOST = os.environ.get("MESHTASTIC_HOST", "localhost")
 MESHTASTIC_PORT = int(os.environ.get("MESHTASTIC_PORT", "4403"))
+MESHTASTIC_CONNECTION = os.environ.get("MESHTASTIC_CONNECTION", "tcp").lower()
+MESHTASTIC_SERIAL_PORT = os.environ.get("MESHTASTIC_SERIAL_PORT", "/dev/ttyACM0")
+
+if MESHTASTIC_CONNECTION == "serial":
+    CONN_DESC = f"serial node {MESHTASTIC_SERIAL_PORT}"
+else:
+    CONN_DESC = f"meshtasticd at {MESHTASTIC_HOST}:{MESHTASTIC_PORT}"
 
 AI_API_BASE = os.environ.get("AI_API_BASE", "http://127.0.0.1:11434/v1").rstrip("/")
 AI_API_KEY = os.environ.get("AI_API_KEY", "ollama")
@@ -170,19 +182,22 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
 
 def on_connection(interface, topic=pub.AUTO_TOPIC):  # pylint: disable=unused-argument
     ensure_my_id(interface)
-    log(f"Connected to meshtasticd at {MESHTASTIC_HOST}:{MESHTASTIC_PORT} (mine={_my_id})")
+    log(f"Connected to {CONN_DESC} (mine={_my_id})")
 
 
 def main():
     pub.subscribe(on_receive, "meshtastic.receive")
     pub.subscribe(on_connection, "meshtastic.connection.established")
 
-    try:
-        interface = TCPInterface(hostname=MESHTASTIC_HOST, portNumber=MESHTASTIC_PORT)
-    except TypeError:
-        interface = TCPInterface(hostname=MESHTASTIC_HOST)
+    if MESHTASTIC_CONNECTION == "serial":
+        interface = SerialInterface(devPath=MESHTASTIC_SERIAL_PORT)
+    else:
+        try:
+            interface = TCPInterface(hostname=MESHTASTIC_HOST, portNumber=MESHTASTIC_PORT)
+        except TypeError:
+            interface = TCPInterface(hostname=MESHTASTIC_HOST)
 
-    log(f"Bridge started. Listening on {MESHTASTIC_HOST}:{MESHTASTIC_PORT}.")
+    log(f"Bridge started. Connected to {CONN_DESC}.")
     try:
         while True:
             time.sleep(1)

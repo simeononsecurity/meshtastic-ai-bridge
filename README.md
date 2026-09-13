@@ -73,9 +73,11 @@ sudo ./setup.sh --lora-slot 2
 | **bridge.py** | Connects to meshtasticd over TCP, watches for `TEXT_MESSAGE_APP`, calls the AI API, and posts the reply back. |
 | **systemd** | Keeps both `meshtasticd.service` and `meshtastic-ai-bridge.service` running across reboots. |
 
-The bridge uses the Meshtastic Python library (`TCPInterface`) against the local
-daemon, so no extra hardware or serial port is needed. Long replies are split
-into Meshtastic-sized chunks automatically.
+The bridge uses the Meshtastic Python library. By default it connects to the
+local daemon with `TCPInterface`; set `MESHTASTIC_CONNECTION=serial` to connect
+to a standalone node over USB with `SerialInterface` instead (see "Standalone
+serial node" below). Long replies are split into Meshtastic-sized chunks
+automatically.
 
 ### Radio module (RAK13300 / SX1262)
 
@@ -119,6 +121,8 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 |----------|---------|---------|
 | `MESHTASTIC_HOST` | `localhost` | meshtasticd host |
 | `MESHTASTIC_PORT` | `4403` | meshtasticd TCP API port |
+| `MESHTASTIC_CONNECTION` | `tcp` | `tcp` = meshtasticd, `serial` = standalone USB node |
+| `MESHTASTIC_SERIAL_PORT` | `/dev/ttyACM0` | USB CDC port when `MESHTASTIC_CONNECTION=serial` |
 | `AI_API_BASE` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `AI_API_KEY` | `ollama` | API key (any string for a local server) |
 | `AI_MODEL` | `qwen3.5:0.8b` | Model name |
@@ -187,6 +191,49 @@ Example with a short-range preset plus two custom channels:
 LORA_MODEM_PRESET=SHORT_FAST
 CHANNELS_EXTRA=Work:<base64-key>:SECONDARY;Family:<base64-key>:SECONDARY
 ```
+
+## Standalone Serial Node (RAK4630 / RAK19713)
+
+If you do not have a raw SPI LoRa HAT, use a Meshtastic device that carries its
+own radio and MCU instead: a **RAK4631 WisBlock Core**, a bare **RAK4630**, or
+a **RAK19713** (a RAK4630 on a mini-PCIe card). These run Meshtastic themselves,
+so the Pi does not run meshtasticd at all; it talks to the node over USB CDC.
+
+```text
+Mesh node (phone/app) --LoRa--> RAK4630 node (Meshtastic) --USB CDC--> bridge.py --> AI API
+                                                                       <-- reply --
+```
+
+1. Flash Meshtastic onto the node at <https://flasher.meshtastic.org/> and
+   select **RAK4631** (WisBlock). The node then enumerates on the Pi as
+   `/dev/ttyACM0`.
+2. Point the bridge at it in `.env`:
+
+   ```dotenv
+   MESHTASTIC_CONNECTION=serial
+   MESHTASTIC_SERIAL_PORT=/dev/ttyACM0
+   ```
+
+3. Configure the node (region, channels, MQTT, admin key) the same way, but use
+   `--port /dev/ttyACM0` instead of `--host localhost`:
+
+   ```bash
+   /opt/meshtastic-ai-bridge/venv/bin/meshtastic --port /dev/ttyACM0 --set region US
+   /opt/meshtastic-ai-bridge/venv/bin/meshtastic --port /dev/ttyACM0 --info
+   ```
+
+Hardware notes:
+
+- A **RAK4631 core** has its own Micro-USB port; plug it straight into the Pi.
+- A bare **RAK4630 module** needs a WisBlock base board (RAK5005-O or RAK19007)
+  to expose USB and the antenna connector.
+- The **RAK19713** is a RAK4630 on a mini-PCIe card, and its host link is USB or
+  UART. Mount it on a mini-PCIe-to-USB adapter. Do not leave it in a LoRaWAN
+  concentrator socket (SenseCAP M1 / Seeed WM1302 HAT), which wires SPI for an
+  SX1302 and does not route USB, so the node is unreachable there.
+
+This offloads all radio processing to the node's own MCU, which is lighter than
+meshtasticd for a 2 GB Pi.
 
 ## Dashboard
 

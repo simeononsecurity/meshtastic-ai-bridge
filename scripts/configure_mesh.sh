@@ -15,7 +15,18 @@ HOST="${MESHTASTIC_HOST:-localhost}"
 INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 get() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
-run() { "$M" --host "$HOST" "$@"; }
+
+# Target either meshtasticd over TCP (default) or a standalone serial node.
+if [[ "$(get MESHTASTIC_CONNECTION)" == "serial" ]]; then
+  MODE=serial
+  SERIAL="$(get MESHTASTIC_SERIAL_PORT)"
+  [[ -n "$SERIAL" ]] || SERIAL="/dev/ttyACM0"
+  CONN_ARGS=(--port "$SERIAL")
+else
+  MODE=tcp
+  CONN_ARGS=(--host "$HOST")
+fi
+run() { "$M" "${CONN_ARGS[@]}" "$@"; }
 
 apply() {
   # apply "<label>" <args...>
@@ -23,26 +34,30 @@ apply() {
   if run "$@" >/dev/null 2>&1; then
     echo "    ok: $label"
   else
-    echo "    FAILED: $label  (retry: $M --host $HOST $*)"
+    echo "    FAILED: $label  (retry: $M ${CONN_ARGS[*]} $*)"
   fi
 }
 
 echo "==> Applying Meshtastic config from $ENV_FILE"
 
-# --- LoRa radio drop-in (which config.d preset enables the radio) ---
-RADIO="$(get LORA_RADIO_PRESET)"
-if [[ -n "$RADIO" ]]; then
-  CONF_DIR="/etc/meshtasticd/config.d"
-  mkdir -p "$CONF_DIR"
-  SRC="$INSTALL_DIR/meshtasticd/config.d/lora-$RADIO.yaml"
-  [[ -f "$SRC" ]] || SRC="/etc/meshtasticd/available.d/lora-$RADIO.yaml"
-  if [[ -f "$SRC" ]]; then
-    # Keep exactly one radio active: clear old lora-*.yaml, install the chosen one.
-    find "$CONF_DIR" -maxdepth 1 -name 'lora-*.yaml' -delete 2>/dev/null || true
-    cp "$SRC" "$CONF_DIR/"
-    echo "    ok: radio preset -> lora-$RADIO.yaml (restart meshtasticd to take effect)"
-  else
-    echo "    WARN: radio preset 'lora-$RADIO.yaml' not found in $INSTALL_DIR/meshtasticd/config.d or /etc/meshtasticd/available.d"
+# --- LoRa radio drop-in (meshtasticd/SPI only; a serial node owns its radio) ---
+if [[ "$MODE" == "serial" ]]; then
+  echo "    skip: radio drop-in (serial node owns its own LoRa radio)"
+else
+  RADIO="$(get LORA_RADIO_PRESET)"
+  if [[ -n "$RADIO" ]]; then
+    CONF_DIR="/etc/meshtasticd/config.d"
+    mkdir -p "$CONF_DIR"
+    SRC="$INSTALL_DIR/meshtasticd/config.d/lora-$RADIO.yaml"
+    [[ -f "$SRC" ]] || SRC="/etc/meshtasticd/available.d/lora-$RADIO.yaml"
+    if [[ -f "$SRC" ]]; then
+      # Keep exactly one radio active: clear old lora-*.yaml, install the chosen one.
+      find "$CONF_DIR" -maxdepth 1 -name 'lora-*.yaml' -delete 2>/dev/null || true
+      cp "$SRC" "$CONF_DIR/"
+      echo "    ok: radio preset -> lora-$RADIO.yaml (restart meshtasticd to take effect)"
+    else
+      echo "    WARN: radio preset 'lora-$RADIO.yaml' not found in $INSTALL_DIR/meshtasticd/config.d or /etc/meshtasticd/available.d"
+    fi
   fi
 fi
 
@@ -77,8 +92,8 @@ if [[ -n "$EXTRA" ]]; then
     NAME="${P[0]:-}"; PSK="${P[1]:-}"; ROLE="${P[2]:-SECONDARY}"
     if [[ -n "$NAME" ]]; then
       # Only add if not already present (keeps re-runs idempotent).
-      if "$M" --host "$HOST" --info 2>/dev/null | grep -qiF "name: $NAME\|$NAME" || \
-         "$M" --host "$HOST" --info 2>/dev/null | grep -qiF "$NAME"; then
+      if "$M" "${CONN_ARGS[@]}" --info 2>/dev/null | grep -qiF "name: $NAME\|$NAME" || \
+         "$M" "${CONN_ARGS[@]}" --info 2>/dev/null | grep -qiF "$NAME"; then
         echo "    skip: channel '$NAME' already present"
       else
         run --ch-add "$NAME" >/dev/null 2>&1 && echo "    ok: added channel '$NAME'" || echo "    FAILED: add channel '$NAME'"
@@ -106,4 +121,4 @@ else
   echo "    mqtt disabled (set MQTT_ENABLED=true to enable)"
 fi
 
-echo "==> Done. Restart meshtasticd if you changed the radio preset or region."
+echo "==> Done. Restart meshtasticd (or reconnect the serial node) if you changed the radio preset or region."
