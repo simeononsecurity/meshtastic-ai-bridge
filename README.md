@@ -86,6 +86,23 @@ doctor, emergency service, electrician, or other qualified professional. Ask
 for a source when accuracy matters, and treat medical or emergency answers as
 general information rather than a diagnosis or guaranteed treatment.
 
+The bridge exposes retrieval routes to the model through labeled `Retrieved
+context`, not native model function calling. `wiki <subject>` searches the
+local Kiwix corpus first, then the local SQLite index, then public Wikipedia if
+enabled. `weather <location>` uses wttr.in, and `news <topic>` uses Google News
+RSS when public retrieval is enabled. Retrieved material is treated as
+untrusted reference text and is never treated as instructions.
+
+### Preliminary model benchmark
+
+On a 2 GB Raspberry Pi 4 with swap enabled, a one-sentence test using
+`qwen2.5:0.5b` completed in about 16.6 seconds and produced 28 output tokens.
+An initial multi-prompt comparison saturated memory and swap; the
+`qwen3.5:0.8b` test did not complete within the short diagnostic window. Use
+one model request at a time and keep `AI_MAX_TOKENS` modest for mesh use. The
+smaller model is currently the safer responsiveness choice; benchmark again
+after changing hardware, prompt length, or model settings.
+
 During setup, the installer offers an offline knowledge-bundle menu. The
 selection is stored in `.env` and downloads resumable Kiwix ZIM files rather
 than expanding them into a duplicate database:
