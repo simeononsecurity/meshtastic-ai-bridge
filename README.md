@@ -225,10 +225,17 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_API_KEY` | `ollama` | API key (any string for a local server) |
 | `AI_MODEL` | `qwen3.5:0.8b` | Model name |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
-| `AI_MAX_TOKENS` | `300` | Max reply length |
+| `AI_MAX_TOKENS` | `160` | Max generated tokens for practical mesh replies |
+| `AI_QUEUE_MAX` | `8` | Maximum queued AI requests |
+| `PACKET_DEDUPE_SECONDS` | `120` | Duplicate packet suppression window |
 | `AI_TEMPERATURE` | `0.7` | Sampling temperature |
 | `REPLY_TO_BROADCAST` | `false` | Also answer channel broadcasts |
-| `REPLY_MAX_CHARS` | `180` | Chunk size used to split replies |
+| `REPLY_MAX_CHARS` | `180` | Maximum chunk size; split at word boundaries |
+
+Direct replies use Meshtastic reliable delivery with ACK/NAK tracking. Broadcast
+replies are logged as queued transmissions because a broadcast has no single
+recipient from which to request a delivery acknowledgement. Bridge logs include
+the packet ID, destination, channel, and delivery response when available.
 | `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
 | `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
 | `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |

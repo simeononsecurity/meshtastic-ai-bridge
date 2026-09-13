@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from pubsub import pub
 from meshtastic.tcp_interface import TCPInterface
 from meshtastic.serial_interface import SerialInterface
+from meshtastic.protobuf import portnums_pb2
 from local_wiki import search as search_local_wiki
 from local_kiwix import search as search_local_kiwix
 
@@ -54,6 +55,8 @@ AI_SYSTEM_PROMPT = os.environ.get(
 )
 AI_MAX_TOKENS = int(os.environ.get("AI_MAX_TOKENS", "300"))
 AI_TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.7"))
+AI_QUEUE_MAX = int(os.environ.get("AI_QUEUE_MAX", "8"))
+PACKET_DEDUPE_SECONDS = int(os.environ.get("PACKET_DEDUPE_SECONDS", "120"))
 
 REPLY_TO_BROADCAST = os.environ.get("REPLY_TO_BROADCAST", "false").lower() in (
     "1", "true", "yes", "on",
@@ -82,11 +85,13 @@ LOG_PATH = os.environ.get("RESPONSES_LOG", "/opt/meshtastic-ai-bridge/responses.
 LIVE_CONFIG_PATH = os.environ.get("LIVE_CONFIG", "/opt/meshtastic-ai-bridge/live_config.json")
 
 _my_id = None
-_inflight = set()
 _lock = threading.Lock()
+_seen_packets = {}
 _mesh_io_lock = threading.RLock()
 _interface = None
 _control_queue = queue.Queue()
+_ai_queue = queue.Queue(maxsize=AI_QUEUE_MAX)
+_ai_active = False
 
 
 def _jsonable(value):
@@ -190,6 +195,46 @@ def start_control_server():
     thread.start()
     log("Control API listening on 127.0.0.1:%s" % server.server_port)
     return server
+
+
+def packet_fingerprint(packet, sender, text, destination, channel_index):
+    """Return a stable key for duplicate radio deliveries."""
+    packet_id = packet.get("id") or packet.get("rxTime")
+    if packet_id:
+        return (sender, packet_id)
+    return (sender, destination, channel_index, text)
+
+
+def ai_worker():
+    """Process accepted requests sequentially to protect the Pi and radio."""
+    global _ai_active
+    while True:
+        job = _ai_queue.get()
+        with _lock:
+            _ai_active = True
+        try:
+            interface = job["interface"]
+            sender = job["sender"]
+            text = job["text"]
+            retrieved = retrieve_context(text)
+            prompt = text
+            if retrieved:
+                prompt = f"User request: {text}\n\nRetrieved context:\n{retrieved}"
+            log(f"Asking model {read_live_model()} for {sender} (queue={_ai_queue.qsize()})")
+            try:
+                reply = ask_ai(prompt)
+            except Exception as exc:  # surface API errors over the mesh
+                log(f"AI request failed for {sender}: {exc}")
+                reply = f"AI error: {exc}"
+            log_interaction(sender, text, reply)
+            try:
+                send_chunks(interface, reply, job["destination"], job["channel"])
+            except Exception as exc:
+                log(f"Reply send failed for {sender}: {exc}")
+        finally:
+            with _lock:
+                _ai_active = False
+            _ai_queue.task_done()
 
 
 def log(msg):
@@ -338,21 +383,65 @@ def ask_ai(prompt):
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _delivery_callback(destination_id, channel_index, packet_id):
+    """Create an ACK/NAK callback for one reliable direct-message chunk."""
+    def callback(packet):
+        payload = packet or {}
+        log(
+            f"Delivery response packet={packet_id} destination={destination_id} "
+            f"channel={channel_index}: {payload}"
+        )
+    return callback
+
+
 def send_chunks(interface, text, destination_id=BROADCAST_ADDR, channel_index=0):
     """Send a text reply, splitting into Meshtastic-sized chunks."""
     text = text.strip()
     if not text:
         return
     while text:
-        chunk, text = text[:REPLY_MAX_CHARS], text[REPLY_MAX_CHARS:]
-        with _mesh_io_lock:
-            interface.sendText(
-                chunk,
-                destinationId=destination_id,
-                channelIndex=channel_index,
-                wantAck=False,
+        if len(text) <= REPLY_MAX_CHARS:
+            chunk, text = text, ""
+        else:
+            split_at = text.rfind(" ", 0, REPLY_MAX_CHARS + 1)
+            if split_at < max(40, REPLY_MAX_CHARS // 2):
+                split_at = REPLY_MAX_CHARS
+            chunk, text = text[:split_at].rstrip(), text[split_at:].lstrip()
+        direct = destination_id != BROADCAST_ADDR
+        packet_ref = {"id": "pending"}
+
+        def delivery_callback(packet):
+            payload = packet or {}
+            log(
+                f"Delivery response packet={packet_ref['id']} destination={destination_id} "
+                f"channel={channel_index}: {payload}"
             )
-        log(f"Sent reply chunk to {destination_id or 'broadcast'} ({len(chunk)} chars)")
+
+        with _mesh_io_lock:
+            if direct:
+                packet = interface.sendData(
+                    chunk.encode("utf-8"),
+                    destinationId=destination_id,
+                    portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+                    channelIndex=channel_index,
+                    wantAck=True,
+                    onResponse=delivery_callback,
+                    onResponseAckPermitted=True,
+                )
+            else:
+                packet = interface.sendText(
+                    chunk,
+                    destinationId=destination_id,
+                    channelIndex=channel_index,
+                    wantAck=False,
+                )
+        packet_id = getattr(packet, "id", None)
+        packet_ref["id"] = packet_id
+        delivery = "reliable direct; awaiting ACK/NAK" if direct else "broadcast; no delivery ACK"
+        log(
+            f"Queued reply packet={packet_id} destination={destination_id} "
+            f"channel={channel_index} chars={len(chunk)} ({delivery})"
+        )
         time.sleep(1)
 
 
@@ -403,30 +492,43 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
         destination_id = sender  # direct message to the node
         channel_index = int(packet.get("channel", 0) or 0)
 
+    fingerprint = packet_fingerprint(
+        packet, sender, text, destination_id, channel_index,
+    )
+    now = time.monotonic()
     with _lock:
-        if sender in _inflight:
+        _seen_packets.update({key: timestamp for key, timestamp in _seen_packets.items()
+                              if now - timestamp < PACKET_DEDUPE_SECONDS})
+        if fingerprint in _seen_packets:
+            log(f"Ignored duplicate text packet from {sender}")
             return
-        _inflight.add(sender)
+        _seen_packets[fingerprint] = now
 
+    job = {
+        "interface": interface,
+        "sender": sender,
+        "text": text,
+        "destination": destination_id,
+        "channel": channel_index,
+    }
+    with _lock:
+        was_busy = _ai_active or not _ai_queue.empty()
     try:
+        _ai_queue.put_nowait(job)
+    except queue.Full:
+        log(f"AI queue full; rejecting request from {sender}")
         try:
-            retrieved = retrieve_context(text)
-            prompt = text
-            if retrieved:
-                prompt = f"User request: {text}\n\nRetrieved context:\n{retrieved}"
-            log(f"Asking model {read_live_model()} for {sender}")
-            reply = ask_ai(prompt)
-        except Exception as exc:  # surface API errors over the mesh
-            log(f"AI request failed for {sender}: {exc}")
-            reply = f"AI error: {exc}"
-        log_interaction(sender, text, reply)
-        try:
-            send_chunks(interface, reply, destination_id, channel_index)
+            send_chunks(interface, "Busy - queue full; try again.", destination_id, channel_index)
         except Exception as exc:
-            log(f"Reply send failed for {sender}: {exc}")
-    finally:
-        with _lock:
-            _inflight.discard(sender)
+            log(f"Queue-full notice failed for {sender}: {exc}")
+        return
+
+    if was_busy:
+        log(f"Queued request from {sender}; queue depth={_ai_queue.qsize()}")
+        try:
+            send_chunks(interface, "Busy - request queued.", destination_id, channel_index)
+        except Exception as exc:
+            log(f"Queue notice failed for {sender}: {exc}")
 
 
 def on_connection(interface, topic=pub.AUTO_TOPIC):  # pylint: disable=unused-argument
@@ -438,6 +540,7 @@ def main():
     global _interface
     pub.subscribe(on_receive, "meshtastic.receive")
     pub.subscribe(on_connection, "meshtastic.connection.established")
+    threading.Thread(target=ai_worker, name="ai-worker", daemon=True).start()
 
     if MESHTASTIC_CONNECTION == "serial":
         interface = SerialInterface(devPath=MESHTASTIC_SERIAL_PORT)
