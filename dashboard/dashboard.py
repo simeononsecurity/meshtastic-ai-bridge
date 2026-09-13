@@ -8,6 +8,7 @@ ollama. Binds 0.0.0.0 by default for LAN access; see DASHBOARD_HOST/DASHBOARD_PO
 import json
 import os
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -141,8 +142,20 @@ def api_set_model():
         return jsonify({"ok": False, "error": "model required"}), 400
     cfg = read_live_config()
     cfg["ai_model"] = model
-    with open(LIVE_CONFIG, "w") as f:
-        json.dump(cfg, f)
+    directory = os.path.dirname(LIVE_CONFIG)
+    fd, temporary = tempfile.mkstemp(prefix="live_config.", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, LIVE_CONFIG)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     return jsonify({"ok": True, "model": model})
 
 
@@ -188,5 +201,5 @@ def api_apply():
 
 if __name__ == "__main__":
     port = int(env_value("DASHBOARD_PORT", "8080") or "8080")
-    host = env_value("DASHBOARD_HOST", "0.0.0.0") or "0.0.0.0"
+    host = env_value("DASHBOARD_HOST", "127.0.0.1") or "127.0.0.1"
     app.run(host=host, port=port, threaded=True)

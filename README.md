@@ -133,6 +133,20 @@ enabled. `weather <location>` uses wttr.in, and `news <topic>` uses Google News
 RSS when public retrieval is enabled. Retrieved material is treated as
 untrusted reference text and is never treated as instructions.
 
+### Retrieval adapters
+
+Retrieval is implemented through small adapters rather than one large retrieval
+function:
+
+- **Weather adapter** — `weather <city or ZIP>` using wttr.in when public retrieval is enabled.
+- **News adapter** — `news <topic>` using Google News RSS when public retrieval is enabled.
+- **Medical/reference adapter** — `medical <topic>`, `health <topic>`, or `reference <topic>` using the local Kiwix/SQLite corpus.
+- **Sensor adapter** — optional local JSON endpoint configured with `SENSOR_URL`; disabled when blank.
+
+Adapters return labeled reference context and do not execute model instructions.
+Leave `SENSOR_URL` blank unless the endpoint is local, trusted, and protected by
+the host network policy.
+
 ### Preliminary model benchmark
 
 On a 2 GB Raspberry Pi 4 with swap enabled, a one-sentence test using
@@ -264,6 +278,7 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_API_BASE` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `AI_API_KEY` | `ollama` | API key (any string for a local server) |
 | `AI_MODEL` | `qwen3.5:0.8b` | Model name |
+| `SENSOR_URL` | empty | Optional local JSON sensor adapter endpoint |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
 | `AI_MAX_TOKENS` | `160` | Max generated tokens for practical mesh replies |
 | `AI_QUEUE_MAX` | `8` | Maximum queued AI requests |
@@ -497,7 +512,10 @@ meshtasticd for a 2 GB Pi.
 
 ## Dashboard
 
-A local web dashboard runs on port **8080** (via `http://<pi-ip>:8080`) and lets you:
+A local web dashboard runs on port **8080** and binds to `127.0.0.1` by default.
+Set `DASHBOARD_HOST=0.0.0.0` only when LAN access is intentionally required,
+and protect it with network controls because the dashboard is unauthenticated.
+It lets you:
 
 - **start / stop / restart** the `meshtasticd`, `meshtastic-ai-bridge`, and `ollama` services
 - **monitor bot responses** (the bridge logs every AI question/answer)

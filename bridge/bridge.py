@@ -31,6 +31,7 @@ from meshtastic.serial_interface import SerialInterface
 from meshtastic.protobuf import portnums_pb2
 from local_wiki import search as search_local_wiki
 from local_kiwix import search as search_local_kiwix
+from retrieval import build_adapters
 
 load_dotenv()
 
@@ -101,6 +102,7 @@ DEFAULT_NEWS_TOPIC = os.environ.get("DEFAULT_NEWS_TOPIC", "").strip()
 HTTP_USER_AGENT = os.environ.get(
     "HTTP_USER_AGENT", "Local-Meshtastic-Assistant/1.0 (Meshtastic AI bridge)"
 ).strip()
+RETRIEVAL_ADAPTERS = []
 
 LOG_PATH = os.environ.get("RESPONSES_LOG", "/opt/meshtastic-ai-bridge/responses.jsonl")
 LIVE_CONFIG_PATH = os.environ.get("LIVE_CONFIG", "/opt/meshtastic-ai-bridge/live_config.json")
@@ -542,6 +544,11 @@ def retrieve_context(query):
     if wiki_match:
         command, value = "wiki", wiki_match.group(1).strip()
     try:
+        for adapter in RETRIEVAL_ADAPTERS:
+            if adapter.handles(command.lower()) and command.lower() not in ("wiki", "wikipedia"):
+                result = adapter.retrieve(value)
+                if result:
+                    return result
         if command.lower() in ("wiki", "wikipedia") and value:
             if LOCAL_WIKI_ENABLED:
                 local_result = search_local_wiki(value)
@@ -855,7 +862,14 @@ def on_connection(interface, topic=pub.AUTO_TOPIC):  # pylint: disable=unused-ar
 
 
 def main():
-    global _interface
+    global _interface, RETRIEVAL_ADAPTERS
+    RETRIEVAL_ADAPTERS = build_adapters(
+        WEB_RETRIEVAL_ENABLED,
+        HTTP_USER_AGENT,
+        DEFAULT_WEATHER_LOCATION,
+        DEFAULT_NEWS_TOPIC,
+        lambda value: search_local_kiwix(value) or search_local_wiki(value),
+    )
     pub.subscribe(on_receive, "meshtastic.receive")
     pub.subscribe(on_connection, "meshtastic.connection.established")
     threading.Thread(target=ai_worker, name="ai-worker", daemon=True).start()
