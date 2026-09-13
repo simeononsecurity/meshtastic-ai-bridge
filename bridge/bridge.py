@@ -79,6 +79,11 @@ BOT_LOOP_MARKERS = tuple(filter(None, (
     value.strip().lower() for value in os.environ.get("BOT_LOOP_MARKERS", "m@i,~ai").split(",")
 )))
 BOT_LOOP_WINDOW_SECONDS = int(os.environ.get("BOT_LOOP_WINDOW_SECONDS", "300"))
+MCP_ENABLED = os.environ.get("MCP_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+MCP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
+MCP_PORT = int(os.environ.get("MCP_PORT", "8767"))
+MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+MCP_ALLOW_WRITE = os.environ.get("MCP_ALLOW_WRITE", "false").lower() in ("1", "true", "yes", "on")
 AI_SYSTEM_PROMPT_FILE = os.environ.get(
     "AI_SYSTEM_PROMPT_FILE", "/opt/meshtastic-ai-bridge/agent_prompt.txt"
 )
@@ -122,6 +127,10 @@ _health = {
     "loop_ignored": 0,
     "channel_ignored": 0,
     "direct_retries": 0,
+    "mcp_calls": 0,
+    "mcp_denied": 0,
+    "mcp_last_tool": None,
+    "mcp_last_call_at": None,
 }
 _recent_replies = {}
 
@@ -173,6 +182,8 @@ def health_snapshot():
         "bot_prefix": BOT_PREFIX,
         "reply_channels": sorted(REPLY_CHANNELS),
         "reply_on_longfast": REPLY_ON_LONGFAST,
+        "mcp_enabled": MCP_ENABLED,
+        "mcp_allow_write": MCP_ALLOW_WRITE,
     })
     return state
 
@@ -242,6 +253,109 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.send_json(200, job["result"])
 
 
+def mcp_tool_result(name, arguments):
+    """Run a small MCP-style tool set using bridge-owned state only."""
+    if name == "mesh_health":
+        return health_snapshot()
+    if name == "mesh_snapshot":
+        return mesh_snapshot()
+    if name == "mesh_nodes":
+        return mesh_snapshot().get("nodes", {})
+    if name == "mesh_channels":
+        return mesh_snapshot().get("channels", [])
+    if name == "recent_interactions":
+        limit = min(max(int((arguments or {}).get("limit", 20)), 1), 100)
+        records = []
+        try:
+            with open(LOG_PATH, encoding="utf-8") as stream:
+                lines = stream.readlines()[-limit:]
+            for line in lines:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            pass
+        return records
+    if name == "offline_search":
+        query = str((arguments or {}).get("query", "")).strip()
+        if not query:
+            raise ValueError("query is required")
+        return search_local_kiwix(query) or search_local_wiki(query) or "No local result."
+    if name == "mesh_send_message":
+        if not MCP_ALLOW_WRITE:
+            raise PermissionError("write tools are disabled")
+        destination = (arguments or {}).get("destination", BROADCAST_ADDR)
+        channel = int((arguments or {}).get("channel", 0))
+        text = str((arguments or {}).get("text", "")).strip()
+        if not text:
+            raise ValueError("text is required")
+        if destination != BROADCAST_ADDR and not str(destination).startswith("!"):
+            raise ValueError("destination must be a node ID beginning with !")
+        with _mesh_io_lock:
+            send_chunks(_interface, text, destination, channel)
+        return {"ok": True, "destination": destination, "channel": channel}
+    raise ValueError(f"unknown tool: {name}")
+
+
+class MCPHandler(BaseHTTPRequestHandler):
+    """Minimal local MCP-compatible JSON-RPC endpoint."""
+
+    def log_message(self, *_args):
+        return
+
+    def send_json(self, status, payload):
+        body = json.dumps(_jsonable(payload)).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def authorized(self):
+        if not MCP_AUTH_TOKEN:
+            return not MCP_ALLOW_WRITE
+        return self.headers.get("Authorization", "") == f"Bearer {MCP_AUTH_TOKEN}"
+
+    def do_POST(self):  # noqa: N802
+        if not self.authorized():
+            with _lock:
+                _health["mcp_denied"] += 1
+            return self.send_json(401, {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "unauthorized"}})
+        try:
+            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "local-meshtastic-bridge", "version": "1"}}
+            elif method == "tools/list":
+                tools = [
+                    {"name": "mesh_health", "description": "Compact bridge and radio health", "inputSchema": {"type": "object"}},
+                    {"name": "mesh_snapshot", "description": "Bridge-owned mesh snapshot", "inputSchema": {"type": "object"}},
+                    {"name": "mesh_nodes", "description": "List known mesh nodes", "inputSchema": {"type": "object"}},
+                    {"name": "mesh_channels", "description": "List local channels", "inputSchema": {"type": "object"}},
+                    {"name": "recent_interactions", "description": "Recent AI interactions", "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
+                    {"name": "offline_search", "description": "Search local Kiwix/Wikipedia content", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+                ]
+                if MCP_ALLOW_WRITE:
+                    tools.append({"name": "mesh_send_message", "description": "Send through the bridge-owned radio connection", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "destination": {"type": ["string", "integer"]}, "channel": {"type": "integer"}}, "required": ["text"]}})
+                result = {"tools": tools}
+            elif method == "tools/call":
+                params = request.get("params", {})
+                result = {"content": [{"type": "text", "text": json.dumps(mcp_tool_result(params.get("name"), params.get("arguments", {})), default=str)}]}
+            else:
+                return self.send_json(404, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "method not found"}})
+            with _lock:
+                _health["mcp_calls"] += 1
+                _health["mcp_last_tool"] = method
+                _health["mcp_last_call_at"] = time.time()
+            self.send_json(200, {"jsonrpc": "2.0", "id": request_id, "result": result})
+        except PermissionError as exc:
+            self.send_json(403, {"jsonrpc": "2.0", "id": None, "error": {"code": -32003, "message": str(exc)}})
+        except Exception as exc:
+            self.send_json(400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32602, "message": str(exc)}})
+
+
 def start_control_server():
     worker = threading.Thread(target=control_worker, name="mesh-control-worker", daemon=True)
     worker.start()
@@ -249,6 +363,16 @@ def start_control_server():
     thread = threading.Thread(target=server.serve_forever, name="mesh-control-api", daemon=True)
     thread.start()
     log("Control API listening on 127.0.0.1:%s" % server.server_port)
+    return server
+
+
+def start_mcp_server():
+    if not MCP_ENABLED:
+        return None
+    server = ThreadingHTTPServer((MCP_HOST, MCP_PORT), MCPHandler)
+    thread = threading.Thread(target=server.serve_forever, name="local-mcp-api", daemon=True)
+    thread.start()
+    log(f"Local MCP listening on {MCP_HOST}:{MCP_PORT} (write={MCP_ALLOW_WRITE})")
     return server
 
 
@@ -746,6 +870,7 @@ def main():
 
     _interface = interface
     control_server = start_control_server()
+    mcp_server = start_mcp_server()
     log(f"Bridge started. Connected to {CONN_DESC}.")
     try:
         last_heartbeat = 0.0
@@ -769,6 +894,8 @@ def main():
         pass
     finally:
         control_server.shutdown()
+        if mcp_server:
+            mcp_server.shutdown()
         interface.close()
 
 

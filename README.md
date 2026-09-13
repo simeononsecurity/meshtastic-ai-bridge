@@ -286,6 +286,32 @@ recipient from which to request a delivery acknowledgement. Bridge logs include
 the packet ID, destination, channel, and delivery response when available.
 The local health endpoint at `http://127.0.0.1:8765/health` reports structured
 receive, queue, reply, and delivery state without exposing node data or secrets.
+
+### Local MCP tools
+
+The bridge includes an optional local-only MCP-compatible JSON-RPC endpoint. It
+reuses the bridge-owned Meshtastic connection and never opens a second radio
+session. It is disabled by default:
+
+```dotenv
+MCP_ENABLED=false
+MCP_HOST=127.0.0.1
+MCP_PORT=8767
+MCP_AUTH_TOKEN=
+MCP_ALLOW_WRITE=false
+```
+
+When enabled, read-only tools include `mesh_health`, `mesh_snapshot`,
+`mesh_nodes`, `mesh_channels`, `recent_interactions`, and `offline_search`.
+Write access requires both `MCP_ALLOW_WRITE=true` and a bearer token. Keep the
+endpoint bound to loopback unless a separately protected reverse proxy is
+required. The dashboard reports MCP enabled state, call count, denied calls,
+and the last tool name without displaying the token.
+
+The endpoint accepts JSON-RPC 2.0 at `http://127.0.0.1:8767`. Read-only MCP
+access can use a bearer token for consistent client behavior; write access must
+never be enabled without a non-empty token. The default production setting is
+disabled.
 | `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
 | `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
 | `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |

@@ -91,6 +91,7 @@ def api_status():
         r = sh(f"systemctl is-active {s}")
         services.append({"name": s, "state": (r["out"].strip() or "unknown")})
     mesh = bridge_control()
+    health = bridge_control("/health")
     return jsonify({
         "services": services,
         "model": active_model(),
@@ -98,6 +99,7 @@ def api_status():
         "mesh": mesh,
         "bot_prefix": env_value("BOT_PREFIX", "!bot"),
         "retrieval_enabled": env_value("WEB_RETRIEVAL_ENABLED", "false"),
+        "mcp": {k: health.get(k) for k in ("mcp_enabled", "mcp_allow_write", "mcp_calls", "mcp_denied", "mcp_last_tool", "mcp_last_call_at")},
     })
 
 
