@@ -1,19 +1,22 @@
 # Local Meshtastic AI Bridge
 
-Run an AI assistant on a Raspberry Pi 4B and make it reachable over a
+Run an AI assistant on a small ARM computer and make it reachable over a
 [Meshtastic](https://meshtastic.org/) mesh via an SPI LoRa radio. Anyone on the
 mesh sends a direct message to the Pi's node; the Pi runs
 [`meshtasticd`](https://meshtastic.org/docs/meshtasticd/) and this bridge replies
 with an answer from any OpenAI-compatible AI backend.
 
 ```text
-Mesh node (phone/app) --LoRa--> meshtasticd (Pi, SPI radio) --TCP:4403--> bridge.py --> AI API
+Mesh node (phone/app) --LoRa--> meshtasticd (ARM host, SPI radio) --TCP:4403--> bridge.py --> AI API
                                                                            <-- reply --
 ```
 
 ## What You Need
 
-- Raspberry Pi 4B, Raspberry Pi OS (Bookworm/Trixie, 32-bit or 64-bit), SD card.
+- A supported ARM Linux computer. **2 GB RAM is the minimum; 4–8 GB is the
+  recommended production range.** The Raspberry Pi 4B used during the proof of
+  concept is not the preferred production platform for local AI plus offline
+  knowledge workloads.
 - A **RAK13300** (Semtech SX1262) LoRa module, typically mounted on the **RAK6421**
   WisBlock base board for Raspberry Pi. The installer ships official presets for
   Slot 1 (`spidev0.0`) and Slot 2 (`spidev0.1`).
@@ -21,31 +24,39 @@ Mesh node (phone/app) --LoRa--> meshtasticd (Pi, SPI radio) --TCP:4403--> bridge
   on the Pi, but any OpenAI-compatible endpoint works (OpenAI, LM Studio, vLLM,
   Groq, OpenRouter).
 
-### Recommended hardware for a low-power deployment
+### Hardware recommendations: proof of concept versus production
 
-The current reference platform is a **Raspberry Pi 4B**, but a practical
-solar-capable build should use the smallest reliable configuration:
+The Pi 4B is useful for proving the radio, bridge, Ollama, and retrieval
+architecture. It is not a comfortable production host for running an AI model,
+Kiwix content, the dashboard, and system services at the same time. Expect
+model loading delays, swap pressure, and less room for future features.
 
-- **Raspberry Pi 4B, 2 GB RAM** for the tested baseline. Use a 4 GB model if
-  you want larger local models or more offline services.
-- **64-bit Raspberry Pi OS** on a high-endurance microSD card for testing; use
-  a small USB SSD for a more durable always-on deployment and larger knowledge
-  bundles.
-- **SX1262 LoRa hardware** such as the RAK13300 on a compatible RAK6421 base,
-  or another supported Meshtastic radio preset. Keep the radio physically
-  separated from noisy power converters and USB devices where possible.
-- **5 V USB-C supply with adequate headroom**, a protected LiFePO4 battery,
-  solar charge controller, and a panel sized for the local weather and duty
-  cycle. The controller and battery are required; a panel alone cannot provide
-  stable Pi power through clouds or nighttime.
-- **Passive cooling or a low-power fan case**. Thermal throttling increases
-  model latency and energy use.
+| Platform | Recommended RAM | Role in this project | Strengths | Tradeoffs |
+|----------|----------------:|---------------------|-----------|-----------|
+| Raspberry Pi 4B | 2 GB minimum; 4 GB preferred | Proof of concept or very small deployment | Mature ecosystem, low power, easy Meshtastic GPIO/SPI integration | Limited memory and CPU; 2 GB is not a good local-AI production target |
+| Raspberry Pi 5 | 4 GB preferred; 8 GB ideal | Best-supported general production choice | Much faster CPU, strong community support, PCIe/USB storage options, straightforward Raspberry Pi OS support | Higher peak power and thermal requirements than Pi 4B; use active cooling for sustained inference |
+| Orange Pi 5 / 5B | 8 GB preferred; 16 GB useful for larger local services | Strong performance-per-dollar alternative | RK3588S-class CPU, abundant RAM options, fast storage, useful onboard acceleration hardware | Smaller ecosystem; verify Linux, Ollama, GPIO/SPI, and supported Meshtastic radio drivers before standardizing |
+| NVIDIA Jetson Nano | 4 GB | Legacy GPU/edge-AI experiment | CUDA/TensorRT ecosystem and low-power modes | Older platform with limited CPU/RAM; not recommended for a new production purchase or larger language models |
+| Jetson Orin Nano / Orin Nano Super | 8 GB preferred | Higher-performance local-AI production node | Much stronger GPU/AI acceleration and better headroom for local models | Higher cost, power draw, cooling, and software complexity; size the solar system accordingly |
+| Small x86 mini-PC | 8–16 GB preferred | Fixed-site or high-capacity deployment | Broadest model/runtime compatibility and easy SSD expansion | Usually higher idle power; less attractive for a small solar-powered field node |
 
-For the lowest power draw, use `qwen2.5:0.5b` or another small quantized model,
-keep responses short, prefer local Kiwix content, disable public retrieval when
-offline, and avoid replying on shared LongFast channels. Solar sizing should be
-measured at the completed installation; it is not guaranteed by the hardware
-list alone.
+**Recommended default:** Raspberry Pi 5 with 8 GB RAM, active cooling, and a
+USB 3 or PCIe/NVMe SSD. Choose an Orange Pi 5 with 8–16 GB when performance and
+RAM-per-dollar matter more than ecosystem simplicity. Choose Jetson Orin Nano
+when GPU-accelerated inference is a primary requirement. Treat the original
+Jetson Nano as an existing-hardware option, not the target for a new build.
+
+For an off-grid or solar-capable installation, the computer is only part of
+the system. Use a protected LiFePO4 battery, a properly sized solar charge
+controller, adequate 5 V regulation, and a panel sized for the local winter
+duty cycle. A panel alone cannot provide stable computer power through clouds
+or nighttime. Keep the SX1262 radio and antenna physically separated from
+noisy power converters and USB devices where possible.
+
+Use 64-bit Linux, durable storage, active cooling for sustained inference, and
+an external SSD when storing Kiwix bundles. Measure idle, receive, transmit,
+and inference power at the completed installation; solar operation is a design
+goal, not a guarantee from a board specification.
 
 ## One-Line Install
 
@@ -293,16 +304,17 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen3.5:0.8b
 ```
 
-Pick a model sized for your Pi 4B RAM:
+Pick a model sized for the host's RAM. The Pi 4B column is a proof-of-concept
+baseline; production hosts should use the 4–8 GB guidance above:
 
-| Model | ~Size | Pi 4 RAM | Use |
-|-------|-------|----------|-----|
-| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | **Default** (best starting point) |
+| Model | ~Size | Minimum practical RAM | Use |
+|-------|------:|----------------------:|-----|
+| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | Small-host starting point |
 | `lfm2.5:1.2b-instruct` | ~0.7 GB | 2-4 GB+ | Efficiency experiment |
 | `llama3.2:1b-instruct-q4_K_M` | ~0.7 GB | 2-4 GB+ | Comparison model |
-| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | Safe mature choice |
-| `qwen3:1.7b-instruct-q4_K_M` | ~1.4 GB | 4 GB+ | Higher-quality experiment |
-| `qwen2.5:3b-instruct-q4_K_M` | ~1.8 GB | 8 GB | Upper-end experiment |
+| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | Better production baseline |
+| `qwen3:1.7b-instruct-q4_K_M` | ~1.4 GB | 4-8 GB+ | Higher quality on stronger hosts |
+| `qwen2.5:3b-instruct-q4_K_M` | ~1.8 GB | 8 GB+ | Larger-host experiment |
 
 Tag names change over time, so confirm with `ollama search <name>` before pulling.
 
