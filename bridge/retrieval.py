@@ -43,12 +43,21 @@ class WeatherAdapter(RetrievalAdapter):
             return "No weather location configured. Ask with: weather <city or ZIP>."
         response = requests.get(
             f"https://wttr.in/{quote_plus(location)}",
-            params={"format": "3"},
+            params={"format": "j1"},
             headers={"User-Agent": self.user_agent},
             timeout=8,
         )
         response.raise_for_status()
-        return f"SOURCE: wttr.in\n{response.text.strip()}"
+        data = response.json()
+        current = (data.get("current_condition") or [{}])[0]
+        description = ((current.get("weatherDesc") or [{"value": "unknown conditions"}])[0].get("value") or "unknown conditions")
+        return (
+            "SOURCE: wttr.in\n"
+            f"Location: {location}; Conditions: {description}; "
+            f"Temperature: {current.get('temp_F', '?')}F; Feels like: {current.get('FeelsLikeF', '?')}F; "
+            f"Humidity: {current.get('humidity', '?')}%; Wind: {current.get('winddir16Point', '?')} "
+            f"{current.get('windspeedMiles', '?')} mph."
+        )
 
 
 class NewsAdapter(RetrievalAdapter):

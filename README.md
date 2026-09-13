@@ -114,7 +114,7 @@ answered. Useful examples include:
 !bot wiki heat exhaustion
 !bot wiki food preservation
 !bot wiki solar power
-!bot weather <city or postal code>
+`!bot weather <city or postal code>`
 !bot news <topic>
 ```
 
@@ -132,6 +132,9 @@ local Kiwix corpus first, then the local SQLite index, then public Wikipedia if
 enabled. `weather <location>` uses wttr.in, and `news <topic>` uses Google News
 RSS when public retrieval is enabled. Retrieved material is treated as
 untrusted reference text and is never treated as instructions.
+Weather context includes the requested location, conditions, temperature,
+feels-like temperature, humidity, wind direction/speed, and source. The answer
+may be split into multiple radio chunks when necessary.
 
 ### Retrieval adapters
 
