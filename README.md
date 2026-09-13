@@ -65,6 +65,27 @@ sudo ./setup.sh --lora-slot 2
    The bridge replies with the AI's answer. Broadcast channel messages are
    ignored unless `REPLY_TO_BROADCAST=true` is set in `.env`.
 
+## Using the assistant
+
+Direct messages can contain a normal question. On a channel, prefix a request
+with `!bot` (or the configured `BOT_PREFIX`) so ordinary conversation is not
+answered. Useful examples include:
+
+```text
+!bot help
+!bot wiki water purification
+!bot wiki heat exhaustion
+!bot wiki food preservation
+!bot wiki solar power
+!bot weather <city or postal code>
+!bot news <topic>
+```
+
+The offline knowledge bundles are reference material, not a substitute for a
+doctor, emergency service, electrician, or other qualified professional. Ask
+for a source when accuracy matters, and treat medical or emergency answers as
+general information rather than a diagnosis or guaranteed treatment.
+
 During setup, the installer offers an offline knowledge-bundle menu. The
 selection is stored in `.env` and downloads resumable Kiwix ZIM files rather
 than expanding them into a duplicate database:
