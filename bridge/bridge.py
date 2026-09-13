@@ -530,9 +530,14 @@ def retrieve_context(query):
         r"(?:weather|forecast|temperature)\s+(?:in|for|at)\s+(.+?)(?:\s+(?:right now|now|rn|today|tonight))?$",
         normalized, re.IGNORECASE,
     )
+    if not weather_match:
+        weather_match = re.search(
+            r"(?:what(?:'s| is)\s+)?the\s+weather\s+(?:like\s+)?(?:in|for|at)\s+(.+)$",
+            normalized, re.IGNORECASE,
+        )
     if weather_match:
         command, value = "weather", weather_match.group(1).strip()
-    elif re.search(r"\b(weather|forecast|temperature)\b", lower):
+    elif re.search(r"\b(weather|forecast|temperature)\b", lower) and not value:
         command, value = "weather", ""
 
     if re.search(r"\b(news|headlines|current events)\b", lower):
