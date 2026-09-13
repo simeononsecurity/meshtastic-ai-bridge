@@ -245,9 +245,23 @@ The RAK19713 uses standard mini-PCIe pins for its host link:
 | 4, 9, 15, 18, 21, 26, 27, 29, 34, 35, 37, 40, 43, 50 | GND |
 
 A mini-PCIe-to-USB adapter routes pins 36/38 (plus power and ground), which is
-all the node needs to flash and to enumerate as `/dev/ttyACM0`. To hand-wire it
-instead, bring USB D+/D− (36/38), one 3.3 V pin, and a ground pin to a USB-A
-lead and plug that into the Pi.
+all the node needs to flash and to enumerate as `/dev/ttyACM0`.
+
+To hand-wire it instead (no adapter), connect a cut USB 2.0 cable:
+
+| USB cable wire | Colour | mPCIe pin |
+|----------------|--------|-----------|
+| D− | white | **36** |
+| D+ | green | **38** |
+| GND | black | any GND pin (4, 9, 15, 18, 21, 26, 27, 29, 34, 35, 37, 40, 43, 50) |
+
+Pins 36 and 38 are both on the even-numbered (solder-side) row of the edge
+connector. Power already comes from the socket's 3.3 V pins, so no cable power
+lead is needed. Confirm white/green with a continuity meter (some cables swap
+them), and attach an antenna to the IPEX connector **before the first
+transmit**. Running the SX1262 without an antenna can damage its PA. If the Pi
+still does not show the node in `lsusb`, the nRF52840 may be waiting for 5 V VBUS
+sense; use an adapter (which handles VBUS) rather than wiring 5 V to a GPIO.
 
 This offloads all radio processing to the node's own MCU, which is lighter than
 meshtasticd for a 2 GB Pi.
