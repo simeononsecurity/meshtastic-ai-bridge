@@ -166,6 +166,41 @@ Optionally set `MQTT_USERNAME` / `MQTT_PASSWORD`, or flip `MQTT_TLS_ENABLED`,
 to meshtasticd and enables channel uplink/downlink so packets flow to and from
 the broker.
 
+### Radio & channel settings
+
+Beyond the radio drop-in, the mesh layer is configured from `.env` and applied
+by `scripts/configure_mesh.sh` (run by `setup.sh` and by the dashboard).
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `LORA_RADIO_PRESET` | `RAK13300-slot1` | Which `meshtasticd/config.d/lora-<name>.yaml` enables the radio |
+| `MESHTASTIC_REGION` | `UNSET` | LoRa region (`US`, `EU_868`, ...) |
+| `LORA_MODEM_PRESET` | `LONG_FAST` | Global modem preset (`LONG_FAST`, `SHORT_FAST`, ...) |
+| `CHANNEL_0_NAME` | `LongFast` | Primary channel name |
+| `CHANNEL_0_PSK` | | base64 key; empty keeps the default |
+| `CHANNEL_0_UPLINK` / `CHANNEL_0_DOWNLINK` | `false` | Bridge channel 0 to/from MQTT |
+| `CHANNELS_EXTRA` | | Extra channels as `name:psk[:role]` separated by `;` |
+
+Example with a short-range preset plus two custom channels:
+
+```dotenv
+LORA_MODEM_PRESET=SHORT_FAST
+CHANNELS_EXTRA=Work:<base64-key>:SECONDARY;Family:<base64-key>:SECONDARY
+```
+
+## Dashboard
+
+A local web dashboard runs on port **8080** (via `http://<pi-ip>:8080`) and lets you:
+
+- **start / stop / restart** the `meshtasticd`, `meshtastic-ai-bridge`, and `ollama` services
+- **monitor bot responses** (the bridge logs every AI question/answer)
+- **switch the active model** live, or **pull** a new Ollama model
+- **view the mesh**: node info, nodes, and channels
+- **re-apply `.env`** to the node without re-running `setup.sh`
+
+It runs as root (so it can control systemd) and is unauthenticated, so keep it
+on a trusted LAN. `DASHBOARD_HOST` / `DASHBOARD_PORT` in `.env` change the bind.
+
 ## Managing Services
 
 ```bash
@@ -189,12 +224,15 @@ sudo systemctl restart meshtastic-ai-bridge
 
 ```text
 setup.sh                           one-line installer
-bridge/bridge.py                   Meshtastic <-> AI daemon
+bridge/bridge.py                   Meshtastic <-> AI daemon (logs to responses.jsonl, reads live_config.json)
 bridge/requirements.txt            Python deps
 bridge/.env.example                configuration template
+scripts/configure_mesh.sh          applies .env -> meshtastic (region, channels, MQTT, admin key)
+dashboard/                         local Flask web dashboard (port 8080)
 meshtasticd/config.d/              radio presets (RAK13300 / RAK13302 / MeshStick) + README
 meshtasticd/config.yaml.example    optional Web server settings
 systemd/meshtastic-ai-bridge.service
+systemd/meshtastic-dashboard.service
 ```
 
 ## References

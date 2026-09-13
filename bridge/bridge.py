@@ -10,6 +10,7 @@ Configure via environment (see .env.example). The OpenAI-compatible endpoint
 works with OpenAI, Ollama, LM Studio, vLLM, Groq, OpenRouter, and others.
 """
 
+import json
 import os
 import threading
 import time
@@ -41,6 +42,9 @@ REPLY_TO_BROADCAST = os.environ.get("REPLY_TO_BROADCAST", "false").lower() in (
 )
 REPLY_MAX_CHARS = int(os.environ.get("REPLY_MAX_CHARS", "180"))
 
+LOG_PATH = os.environ.get("RESPONSES_LOG", "/opt/meshtastic-ai-bridge/responses.jsonl")
+LIVE_CONFIG_PATH = os.environ.get("LIVE_CONFIG", "/opt/meshtastic-ai-bridge/live_config.json")
+
 _my_id = None
 _inflight = set()
 _lock = threading.Lock()
@@ -50,6 +54,34 @@ def log(msg):
     print(msg, flush=True)
 
 
+def read_live_model():
+    """Return the active model, letting the dashboard override it live."""
+    try:
+        with open(LIVE_CONFIG_PATH) as f:
+            cfg = json.load(f)
+        if cfg.get("ai_model"):
+            return cfg["ai_model"]
+    except Exception:
+        pass
+    return AI_MODEL
+
+
+def log_interaction(sender, prompt, reply):
+    """Append an interaction to the response log for the dashboard."""
+    try:
+        record = {
+            "ts": time.time(),
+            "from": sender,
+            "prompt": prompt,
+            "reply": reply,
+            "model": read_live_model(),
+        }
+        with open(LOG_PATH, "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
 def ask_ai(prompt):
     """Call an OpenAI-compatible chat completions endpoint."""
     url = f"{AI_API_BASE}/chat/completions"
@@ -57,7 +89,7 @@ def ask_ai(prompt):
     if AI_API_KEY:
         headers["Authorization"] = f"Bearer {AI_API_KEY}"
     payload = {
-        "model": AI_MODEL,
+        "model": read_live_model(),
         "messages": [
             {"role": "system", "content": AI_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -129,6 +161,7 @@ def on_receive(packet, interface=None):  # pylint: disable=unused-argument
             reply = ask_ai(text)
         except Exception as exc:  # surface API errors over the mesh
             reply = f"AI error: {exc}"
+        log_interaction(sender, text, reply)
         send_chunks(interface, reply, destination_id)
     finally:
         with _lock:

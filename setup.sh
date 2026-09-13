@@ -124,6 +124,8 @@ echo "==> [4/6] Installing the AI bridge"
 INSTALL_DIR="/opt/meshtastic-ai-bridge"
 mkdir -p "$INSTALL_DIR"
 cp -r "$SCRIPT_DIR/bridge/." "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/dashboard" "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/scripts" "$INSTALL_DIR/"
 if [[ ! -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/.env.example" ]]; then
   cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
   echo "    Created $INSTALL_DIR/.env (edit it with your AI API details before use)"
@@ -139,62 +141,21 @@ chown -R meshtasticbridge:meshtasticbridge "$INSTALL_DIR"
 
 echo "==> [5/6] Installing systemd service"
 cp "$SCRIPT_DIR/systemd/meshtastic-ai-bridge.service" /etc/systemd/system/
+cp "$SCRIPT_DIR/systemd/meshtastic-dashboard.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable meshtasticd
 systemctl enable meshtastic-ai-bridge
+systemctl enable meshtastic-dashboard
 
 echo "==> [6/6] Starting services"
 systemctl restart meshtasticd
 sleep 5
 
-# Apply the admin key so the node can be managed from another Meshtastic node.
-ADMIN_KEY="$(sed -n 's/^MESHTASTIC_ADMIN_KEY=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-if [[ -n "$ADMIN_KEY" ]]; then
-  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost --set security.admin_key "$ADMIN_KEY" >/dev/null 2>&1; then
-    echo "    Applied Meshtastic admin key."
-  else
-    echo "!   Could not apply the admin key. After meshtasticd is up, run:"
-    echo "    $INSTALL_DIR/venv/bin/meshtastic --host localhost --set security.admin_key \"<key>\""
-  fi
-fi
+echo "==> [7/7] Applying Mesh config (radio region/preset, channels, admin key, MQTT)"
+bash "$INSTALL_DIR/scripts/configure_mesh.sh" "$INSTALL_DIR/.env" || \
+  echo "!  Mesh config not fully applied (is the radio up?). Re-run: sudo bash $INSTALL_DIR/scripts/configure_mesh.sh"
 
-echo "==> [7/7] Configuring MQTT (off by default)"
-MQTT_ENABLED="$(sed -n 's/^MQTT_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-if [[ "$MQTT_ENABLED" == "true" || "$MQTT_ENABLED" == "1" || "$MQTT_ENABLED" == "yes" ]]; then
-  MQTT_ARGS=(--set mqtt.enabled true)
-  MQTT_ADDR="$(sed -n 's/^MQTT_ADDRESS=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_USER="$(sed -n 's/^MQTT_USERNAME=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_PASS="$(sed -n 's/^MQTT_PASSWORD=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_ROOT="$(sed -n 's/^MQTT_ROOT=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_TLS="$(sed -n 's/^MQTT_TLS_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_ENC="$(sed -n 's/^MQTT_ENCRYPTION_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-  MQTT_JSON="$(sed -n 's/^MQTT_JSON_ENABLED=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -1)"
-
-  [[ -n "$MQTT_ADDR" ]] && MQTT_ARGS+=(--set mqtt.address "$MQTT_ADDR")
-  [[ -n "$MQTT_USER" ]] && MQTT_ARGS+=(--set mqtt.username "$MQTT_USER")
-  [[ -n "$MQTT_PASS" ]] && MQTT_ARGS+=(--set mqtt.password "$MQTT_PASS")
-  [[ -n "$MQTT_ROOT" ]] && MQTT_ARGS+=(--set mqtt.root "$MQTT_ROOT")
-  [[ -n "$MQTT_TLS" ]] && MQTT_ARGS+=(--set mqtt.tls_enabled "$MQTT_TLS")
-  [[ -n "$MQTT_ENC" ]] && MQTT_ARGS+=(--set mqtt.encryption_enabled "$MQTT_ENC")
-  [[ -n "$MQTT_JSON" ]] && MQTT_ARGS+=(--set mqtt.json_enabled "$MQTT_JSON")
-
-  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost "${MQTT_ARGS[@]}" >/dev/null 2>&1; then
-    echo "    Applied MQTT (server: ${MQTT_ADDR:-default})."
-  else
-    echo "!   Could not apply MQTT. After meshtasticd is up, run:"
-    echo "    $INSTALL_DIR/venv/bin/meshtastic --host localhost ${MQTT_ARGS[*]}"
-  fi
-
-  if "$INSTALL_DIR/venv/bin/meshtastic" --host localhost --ch-set uplink_enabled true --ch-set downlink_enabled true >/dev/null 2>&1; then
-    echo "    Enabled channel uplink + downlink."
-  else
-    echo "!   Could not enable channel uplink/downlink. Manually: meshtastic --host localhost --ch-set uplink_enabled true --ch-set downlink_enabled true"
-  fi
-else
-  echo "    MQTT disabled. Set MQTT_ENABLED=true and MQTT_ADDRESS in .env to enable."
-fi
-
-systemctl restart meshtastic-ai-bridge || true
+systemctl restart meshtastic-ai-bridge meshtastic-dashboard || true
 
 cat <<EOF
 
@@ -204,6 +165,7 @@ Done. Next steps:
   2. Reboot so SPI takes effect:  sudo reboot
   3. Verify the radio:  $INSTALL_DIR/venv/bin/meshtastic --host localhost --info
   4. Watch the bridge log:  journalctl -u meshtastic-ai-bridge -f
+  5. Open the dashboard:  http://$(hostname -I | awk '{print $1}'):8080
 
 Send a direct message to this node over Meshtastic and the AI will reply.
 EOF

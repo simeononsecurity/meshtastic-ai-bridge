@@ -1,0 +1,16 @@
+[Unit]
+Description=Meshtastic AI Bridge Dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/meshtastic-ai-bridge
+Environment=INSTALL_DIR=/opt/meshtastic-ai-bridge
+ExecStart=/opt/meshtastic-ai-bridge/venv/bin/python /opt/meshtastic-ai-bridge/dashboard/dashboard.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
