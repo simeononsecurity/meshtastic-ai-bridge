@@ -22,7 +22,7 @@ Mesh node (phone/app) --LoRa--> meshtasticd (ARM host, SPI radio) --TCP:4403--> 
   Slot 1 (`spidev0.0`) and Slot 2 (`spidev0.1`).
 - An AI model: by default a small local model served by [Ollama](https://ollama.com/)
   on the Pi, but any OpenAI-compatible endpoint works (OpenAI, LM Studio, vLLM,
-  Groq, OpenRouter).
+  Groq, OpenRouter). See [MODELS.md](MODELS.md) for which model to run.
 
 ### Hardware recommendations: proof of concept versus production
 
@@ -80,8 +80,12 @@ sudo ./setup.sh --lora-slot 2
 
    ```bash
    curl -fsSL https://ollama.com/install.sh | sh
-   ollama pull qwen3.5:0.8b
+   ollama pull qwen2.5:0.5b
    ```
+
+   That default is the only registry model measured as both fast and stable on
+   the documented 2 GB minimum. On a 4-8 GB host, pick from the table in
+   [MODELS.md](MODELS.md).
 
 2. Edit the AI settings if needed (the defaults already point at Ollama):
 
@@ -150,15 +154,46 @@ Adapters return labeled reference context and do not execute model instructions.
 Leave `SENSOR_URL` blank unless the endpoint is local, trusted, and protected by
 the host network policy.
 
-### Preliminary model benchmark
+### Local AI model
 
-On a 2 GB Raspberry Pi 4 with swap enabled, a one-sentence test using
-`qwen2.5:0.5b` completed in about 16.6 seconds and produced 28 output tokens.
-An initial multi-prompt comparison saturated memory and swap; the
-`qwen3.5:0.8b` test did not complete within the short diagnostic window. Use
-one model request at a time and keep `AI_MAX_TOKENS` modest for mesh use. The
-smaller model is currently the safer responsiveness choice; benchmark again
-after changing hardware, prompt length, or model settings.
+The bridge answers with a small local model served by [Ollama](https://ollama.com/);
+any OpenAI-compatible endpoint works instead. Pick a model by the host's RAM - the
+default `qwen2.5:0.5b` is the only model measured as both fast and stable on the
+documented 2 GB minimum:
+
+| Host RAM | Model |
+|---------:|-------|
+| 2 GB | `qwen2.5:0.5b` - the only registry build measured as stable on 2 GB |
+| 4 GB | `gemma3:1b` |
+| 8 GB | `gemma3:1b` or `qwen2.5:1.5b-instruct-q4_K_M` |
+
+On 4 GB and up, `lfm2.5-1.2b` and `lfm2.5-230m` are both faster and better behaved
+than any registry build; they need the one-time GGUF import described in
+[MODELS.md](MODELS.md).
+
+Two failure modes are worth knowing before you deploy:
+
+- **Reasoning models answer with an empty message.** `qwen3`, `qwen3.5`,
+  `minicpm5`, `ling-3.0` and `spark-x2.5` emit a hidden reasoning block by default.
+  With a mesh-sized `AI_MAX_TOKENS` that reasoning consumes the whole budget, so the
+  bridge posts nothing. Prefer a non-thinking model, or send `think: false` when your
+  client supports it.
+- **An oversized model can reset the node.** On a Raspberry Pi with the hardware
+  watchdog armed, memory starvation reboots the board instead of returning an error.
+
+Models are only recommended if they also **obey the reply contract**: three bullets
+or fewer, under 90 words, plain text, a finished sentence, and grounded in the
+retrieved context with its source named. Speed alone does not qualify a model,
+because a rambling answer costs airtime on a shared channel and an empty one looks
+like an outage.
+
+[**MODELS.md**](MODELS.md) is the full guide: measured load, time-to-first-token,
+tokens/second and peak memory for 20+ models on a 2 GB Pi 4 and an 8 GB Pi 5, the
+`scripts/benchmark_models.sh` harness, verdicts on published Pi 5 benchmarks, how to
+install models that are not in the Ollama registry, and how to cap the Ollama
+service so an oversized model fails cleanly.
+
+### Offline knowledge bundles
 
 During setup, the installer offers an offline knowledge-bundle menu. The
 selection is stored in `.env` and downloads resumable Kiwix ZIM files rather
@@ -280,7 +315,7 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `MESHTASTIC_SERIAL_PORT` | `/dev/ttyACM0` | USB CDC port when `MESHTASTIC_CONNECTION=serial` |
 | `AI_API_BASE` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `AI_API_KEY` | `ollama` | API key (any string for a local server) |
-| `AI_MODEL` | `qwen3.5:0.8b` | Model name |
+| `AI_MODEL` | `qwen2.5:0.5b` | Model name |
 | `SENSOR_URL` | empty | Optional local JSON sensor adapter endpoint |
 | `AI_SYSTEM_PROMPT` | (see `.env.example`) | System prompt |
 | `AI_MAX_TOKENS` | `220` | Max generated tokens; truncated answers receive a short continuation |
@@ -298,6 +333,15 @@ All bridge settings are environment variables in `/opt/meshtastic-ai-bridge/.env
 | `AI_QUEUE_TIMEOUT_SECONDS` | `180` | Expire queued requests after this time |
 | `BOT_LOOP_MARKERS` | `m@i,~ai` | Prefixes from other AI bots to ignore |
 | `BOT_LOOP_WINDOW_SECONDS` | `300` | Recent-response loop suppression window |
+| `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
+| `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
+| `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |
+| `LOCAL_KIWIX_ENABLED` | `true` | Search the local full-text Kiwix corpus first |
+| `LOCAL_KIWIX_URL` | `http://127.0.0.1:8766` | Loopback Kiwix search service |
+| `KIWIX_BUNDLES` | `prompt` | Offline bundle selection |
+| `KIWIX_MAX_DOWNLOAD_GB` | `4` | Maximum estimated bundle download |
+
+Model selection and sizing are covered in [MODELS.md](MODELS.md).
 
 Direct replies use Meshtastic reliable delivery with ACK/NAK tracking. Broadcast
 replies are logged as queued transmissions because a broadcast has no single
@@ -331,37 +375,6 @@ The endpoint accepts JSON-RPC 2.0 at `http://127.0.0.1:8767`. Read-only MCP
 access can use a bearer token for consistent client behavior; write access must
 never be enabled without a non-empty token. The default production setting is
 disabled.
-| `WEB_RETRIEVAL_ENABLED` | `true` | Allow public weather/news/Wikipedia retrieval |
-| `LOCAL_WIKI_ENABLED` | `true` | Search the local SQLite Wikipedia index first |
-| `LOCAL_WIKI_INDEX` | `/opt/meshtastic-ai-bridge/data/wiki.sqlite3` | Local FTS5 index path |
-| `LOCAL_KIWIX_ENABLED` | `true` | Search the local full-text Kiwix corpus first |
-| `LOCAL_KIWIX_URL` | `http://127.0.0.1:8766` | Loopback Kiwix search service |
-| `KIWIX_BUNDLES` | `prompt` | Offline bundle selection |
-| `KIWIX_MAX_DOWNLOAD_GB` | `4` | Maximum estimated bundle download |
-
-### Local model (default)
-
-The bridge defaults to a small model served by [Ollama](https://ollama.com/)
-on the same Pi. Install it and pull the model:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3.5:0.8b
-```
-
-Pick a model sized for the host's RAM. The Pi 4B column is a proof-of-concept
-baseline; production hosts should use the 4–8 GB guidance above:
-
-| Model | ~Size | Minimum practical RAM | Use |
-|-------|------:|----------------------:|-----|
-| `qwen3.5:0.8b` | ~0.5-0.8 GB | 2 GB+ | Small-host starting point |
-| `lfm2.5:1.2b-instruct` | ~0.7 GB | 2-4 GB+ | Efficiency experiment |
-| `llama3.2:1b-instruct-q4_K_M` | ~0.7 GB | 2-4 GB+ | Comparison model |
-| `qwen2.5:1.5b-instruct-q4_K_M` | ~1 GB | 4 GB+ | Better production baseline |
-| `qwen3:1.7b-instruct-q4_K_M` | ~1.4 GB | 4-8 GB+ | Higher quality on stronger hosts |
-| `qwen2.5:3b-instruct-q4_K_M` | ~1.8 GB | 8 GB+ | Larger-host experiment |
-
-Tag names change over time, so confirm with `ollama search <name>` before pulling.
 
 ### Self-checks
 
@@ -399,7 +412,7 @@ ZIM files from `./zim` (or `KIWIX_DATA_DIR=/absolute/path/to/zim`) read-only.
 After starting Ollama, pull the configured model inside the container:
 
 ```bash
-docker compose exec ollama ollama pull qwen3.5:0.8b
+docker compose exec ollama ollama pull qwen2.5:0.5b
 ```
 
 The host bridge can use the containerized Ollama endpoint with the existing
@@ -593,15 +606,20 @@ sudo systemctl restart meshtastic-ai-bridge
 | No AI reply | Ollama running, model pulled, `.env` correct; `journalctl -u meshtastic-ai-bridge` |
 | Replies only to DMs | Expected. Set `REPLY_TO_BROADCAST=true` for channel replies |
 | Short replies | `AI_MAX_TOKENS` too low, or replies split by `REPLY_MAX_CHARS` |
+| Empty AI reply | A reasoning model (`qwen3`, `qwen3.5`, `minicpm5`, `ling-3.0`, `spark-x2.5`) may be spending the whole budget on hidden reasoning. Prefer a non-thinking model; see [MODELS.md](MODELS.md) |
+| Node reboots or hangs under load | The model is larger than the host's RAM. Cap the Ollama service as described in [MODELS.md](MODELS.md) |
 
 ## Files
 
 ```text
+MODELS.md                          AI model guide: sizing, measured benchmarks, GGUF imports
 setup.sh                           one-line installer
 bridge/bridge.py                   Meshtastic <-> AI daemon (logs to responses.jsonl, reads live_config.json)
 bridge/requirements.txt            Python deps
 bridge/.env.example                configuration template
 scripts/build_local_wiki_index.py  builds the optional local Wikipedia FTS5 index
+scripts/benchmark_models.py        measures candidate models on the node (cold load, TTFT, tok/s, memory)
+scripts/benchmark_models.sh        wrapper for benchmark_models.py
 scripts/configure_mesh.sh          applies .env -> meshtastic (region, channels, MQTT, admin key)
 scripts/install_offline_knowledge.sh downloads selected Kiwix offline bundles
 scripts/start_kiwix.sh             starts the local Kiwix HTTP service

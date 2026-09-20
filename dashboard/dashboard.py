@@ -67,7 +67,7 @@ def read_live_config():
 
 
 def active_model():
-    return read_live_config().get("ai_model") or env_value("AI_MODEL", "qwen3.5:0.8b")
+    return read_live_config().get("ai_model") or env_value("AI_MODEL", "qwen2.5:0.5b")
 
 
 def ollama_models():
