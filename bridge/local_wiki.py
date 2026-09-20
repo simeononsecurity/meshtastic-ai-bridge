@@ -33,16 +33,20 @@ def search(query, index_path=None, limit=3):
     if not terms:
         return ""
     match = " AND ".join(f'"{term.replace(chr(34), "")}"' for term in terms)
+    connection = None
     try:
-        with _connect(path) as connection:
-            rows = connection.execute(
-                """SELECT title, text, url, bm25(wiki_fts) AS rank
-                   FROM wiki_fts WHERE wiki_fts MATCH ?
-                   ORDER BY rank LIMIT ?""",
-                (match, int(limit)),
-            ).fetchall()
+        connection = _connect(path)
+        rows = connection.execute(
+            """SELECT title, text, url, bm25(wiki_fts) AS rank
+               FROM wiki_fts WHERE wiki_fts MATCH ?
+               ORDER BY rank LIMIT ?""",
+            (match, int(limit)),
+        ).fetchall()
     except (sqlite3.DatabaseError, OSError):
         return ""
+    finally:
+        if connection is not None:
+            connection.close()
 
     if not rows:
         return ""

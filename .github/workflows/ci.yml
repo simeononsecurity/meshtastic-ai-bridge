@@ -1,0 +1,77 @@
+name: CI
+
+# Static checks and unit tests only: no radio, no Ollama, no network calls, and
+# no secrets. Pull requests from forks run with a read-only token.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-check:
+    name: Repository self-checks (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Parses every Python file, runs bash -n on every shell script, validates
+      # the Markdown links/anchors/tables, checks .env.example for duplicate
+      # keys, and confirms MCP is still disabled by default.
+      - name: Run offline repository checks
+        run: ./scripts/self_check.sh
+
+  unit-tests:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install bridge dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r bridge/requirements.txt
+
+      # REQUIRE_BRIDGE_DEPS makes a missing dependency a failure instead of a
+      # silent skip, so the bridge and retrieval tests always really execute.
+      - name: Run unit tests
+        env:
+          REQUIRE_BRIDGE_DEPS: "1"
+        run: python -m unittest discover -s tests -v
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Lint shell scripts
+        run: shellcheck --version && shellcheck setup.sh scripts/*.sh

@@ -385,11 +385,25 @@ AI backend, network access, or secrets:
 ./scripts/self_check.sh
 ```
 
-The checks parse every project Python file, run `bash -n` against every shell
-script, detect duplicate `.env.example` keys, verify that MCP remains disabled by
+The checks parse every project Python file (discovered, not hand-listed), run
+`bash -n` against every shell script, validate the Markdown links, anchors and
+tables, detect duplicate `.env.example` keys, verify that MCP remains disabled by
 default, and validate the Docker Compose file when Docker is installed. A failed
 check returns a non-zero exit status, so it can be used from CI or a deployment
 script.
+
+Unit tests cover the logic that decides what goes on the air - reply chunking,
+channel gating, loop suppression, delivery classification, retrieval-adapter
+routing, the local FTS5 index round trip, and the model-compliance gate:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Tests that import the bridge need its requirements installed and skip without
+them; set `REQUIRE_BRIDGE_DEPS=1` to turn a missing dependency into a failure.
+`.github/workflows/ci.yml` runs both suites plus `shellcheck` on every push and
+pull request, and needs no secrets.
 
 ### Optional Docker services
 
@@ -623,12 +637,14 @@ scripts/benchmark_models.sh        wrapper for benchmark_models.py
 scripts/configure_mesh.sh          applies .env -> meshtastic (region, channels, MQTT, admin key)
 scripts/install_offline_knowledge.sh downloads selected Kiwix offline bundles
 scripts/start_kiwix.sh             starts the local Kiwix HTTP service
+tests/                             unit tests for reply, retrieval, index and model-scoring logic
 dashboard/                         local Flask web dashboard (port 8080)
 meshtasticd/config.d/              radio presets (RAK13300 / RAK13302 / MeshStick) + README
 meshtasticd/config.yaml.example    optional Web server settings
 systemd/meshtastic-ai-bridge.service
 systemd/meshtastic-kiwix.service
 systemd/meshtastic-dashboard.service
+.github/workflows/ci.yml           CI: repository self-checks, unit tests, shellcheck
 ```
 
 ## References

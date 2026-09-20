@@ -36,6 +36,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# shellcheck source=/dev/null
 source /etc/os-release
 
 echo "==> Detected: $PRETTY_NAME"
@@ -102,7 +103,10 @@ if [[ -n "$PRESET" ]]; then
   if [[ ! -f "$SRC" ]]; then
     echo "!  Preset not found: $SRC"
     echo "   Available LoRa presets:"
-    ls "$MESHDIR/available.d" 2>/dev/null | grep -i lora || true
+    for preset in "$MESHDIR"/available.d/*lora*; do
+      [ -f "$preset" ] || continue
+      basename "$preset"
+    done
     exit 1
   fi
 else
