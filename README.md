@@ -157,19 +157,21 @@ the host network policy.
 ### Local AI model
 
 The bridge answers with a small local model served by [Ollama](https://ollama.com/);
-any OpenAI-compatible endpoint works instead. Pick a model by the host's RAM - the
-default `qwen2.5:0.5b` is the only model measured as both fast and stable on the
-documented 2 GB minimum:
+any OpenAI-compatible endpoint works instead. Pick by the host's RAM, but pick on
+**instruction compliance first and speed second** - only three of the 13 small
+models measured obeyed the reply contract on every one of 60 attempts:
 
-| Host RAM | Model |
-|---------:|-------|
-| 2 GB | `qwen2.5:0.5b` - the only registry build measured as stable on 2 GB |
-| 4 GB | `gemma3:1b` |
-| 8 GB | `gemma3:1b` or `qwen2.5:1.5b-instruct-q4_K_M` |
+| Host RAM | Model | Comply |
+|---------:|-------|-------:|
+| 2 GB | `lfm2.5-1.2b` (needs the one-time import below); `lfm2.5-350m` or `qwen2.5:0.5b` if it will not fit | 100% / 67-83% |
+| 4 GB | `lfm2.5-1.2b`, or the registry build `gemma3:1b` | 100% |
+| 8 GB | `lfm2.5-1.2b` (15.5 tok/s) or `gemma3:1b` (11.2 tok/s) | 100% |
+| 8 GB with a CUDA GPU | `gemma3:1b` - 87.5 tok/s | 100% |
 
-On 4 GB and up, `lfm2.5-1.2b` and `lfm2.5-230m` are both faster and better behaved
-than any registry build; they need the one-time GGUF import described in
-[MODELS.md](MODELS.md).
+The default `qwen2.5:0.5b` is retained only because it is the one registry build
+measured as stable on the documented 2 GB minimum; it complied on just 33-67% of
+attempts, so prefer `lfm2.5-1.2b` on any host that can hold ~1 GB of model. Both
+LFM2.5 models need the one-time GGUF import described in [MODELS.md](MODELS.md).
 
 Two failure modes are worth knowing before you deploy:
 

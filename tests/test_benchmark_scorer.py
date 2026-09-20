@@ -72,6 +72,39 @@ class ScorerTests(unittest.TestCase):
         for text in ("Symptoms include nausea,", "Open the valve and"):
             self.assertIn("unfinished", bm.score_response(prompt("wiki_context"), text)["reasons"])
 
+    def test_source_domain_tail_is_not_mistaken_for_truncation(self):
+        """A trailing source domain must not look like a dangling connector.
+
+        Regression: the truncation regex matched the "in" of "wttr.in" because a
+        dot counts as a word boundary, so every weather reply was reported as
+        cut off mid-sentence.
+        """
+        result = bm.score_response(
+            prompt("weather_context"),
+            "Boulder, CO is partly cloudy at 18 C, humidity 38%, wind 9 km/h. "
+            "Reported via wttr.in. Source: wttr.in",
+        )
+        self.assertTrue(result["comply"], result["reasons"])
+        self.assertNotIn("unfinished", result["reasons"])
+        self.assertIn("no_final_stop", result["minor"])
+
+    def test_cap_limited_stop_without_full_stop_is_truncation(self):
+        """Hitting the token cap with no final stop is real truncation."""
+        text = "Heat exhaustion causes heavy sweating, clammy skin, nausea and dizz"
+        result = bm.score_response(prompt("wiki_context"), text, hit_token_cap=True)
+        self.assertIn("unfinished", result["reasons"])
+
+    def test_complete_reply_without_final_stop_is_only_a_note(self):
+        text = "Heat exhaustion causes heavy sweating, clammy skin, nausea and dizziness"
+        result = bm.score_response(prompt("wiki_context"), text, hit_token_cap=False)
+        self.assertNotIn("unfinished", result["reasons"])
+        self.assertIn("no_final_stop", result["minor"])
+
+    def test_inline_bullets_are_counted(self):
+        """Bullets hidden on one line must still count toward the budget."""
+        text = "- one thing. - two things. - three things. - four things."
+        self.assertIn("too_many_bullets", bm.score_response(prompt("help_reply"), text)["reasons"])
+
     def test_missing_source_citation_fails(self):
         result = bm.score_response(
             prompt("weather_context"), "Boulder is partly cloudy at 18 C with 38 percent humidity."

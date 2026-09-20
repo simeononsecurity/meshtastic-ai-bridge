@@ -283,15 +283,19 @@ def unload_all_models(base_url, installed):
 
 TERMINAL_PUNCT = re.compile(r"[.!?\u2026\"')\]]$")
 # A reply cut off by the token cap usually ends on a comma, dash or connector.
+# Trailing punctuation matches wherever it sits, but a connector word must not be
+# preceded by a word character, "." or "/" - otherwise the "in" of a source such
+# as "wttr.in" would look like a dangling connector and every weather reply would
+# be reported as truncated.
 DANGLING_TAIL = re.compile(
-    r"(?:[,;:\-\u2013\u2014]|\b(?:and|or|but|the|a|an|of|to|in|on|with|for|that|"
-    r"is|are|was|were|be|as|at|by|from|if|then|than|so|because|while|when|"
-    r"which|your|their|its)\b)\s*$",
+    r"(?:[,;:\-\u2013\u2014]\s*$|(?<![\w./])(?:and|or|but|the|a|an|of|to|in|on|"
+    r"with|for|that|is|are|was|were|be|as|at|by|from|if|then|than|so|because|"
+    r"while|when|which|your|their|its)\s*$)",
     re.IGNORECASE,
 )
 
 
-def score_response(prompt, text, thinking_chars=0):
+def score_response(prompt, text, thinking_chars=0, hit_token_cap=False):
     """Score one reply against the limits the bridge and agent prompt enforce.
 
     Coding a model as usable needs more than throughput: the reply has to arrive
@@ -299,18 +303,28 @@ def score_response(prompt, text, thinking_chars=0):
     grounded in whatever retrieval context the bridge supplied. Returns the
     pass/fail decision plus the individual checks so the report can show why a
     model was rejected rather than only how fast it decoded.
+
+    `hit_token_cap` is what separates the two kinds of "did not end with a full
+    stop". A reply that ran into the token cap is genuinely truncated and vetoes
+    the model. A reply that stopped on its own and merely omitted the final
+    period is complete, so it is recorded as the cosmetic `minor` note
+    `no_final_stop` instead of a failure.
     """
     text = (text or "").strip()
     lowered = text.lower()
     words = len(text.split())
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     bullets = sum(
-        1 for line in lines if re.match(r"^(?:[-*\u2022]|\d+[.)])\s+\S", line)
+        len(re.findall(r"(?:^|\s)[-*\u2022]\s+[A-Za-z]", line))
+        + len(re.findall(r"(?:^|\s)\d+[.)]\s+[A-Za-z]", line))
+        for line in lines
     )
     has_table = bool(re.search(r"^\s*\|.*\|\s*$", text, re.M))
     has_fence = "```" in text
-    # Only flag truncation, not bullet lists that simply omit a final period.
-    finished = bool(TERMINAL_PUNCT.search(text)) or not DANGLING_TAIL.search(text)
+    dangling = bool(DANGLING_TAIL.search(text))
+    terminal = bool(TERMINAL_PUNCT.search(text))
+    # Truncation means a dangling tail, or a cap-limited stop with no full stop.
+    truncated = bool(text) and (dangling or (hit_token_cap and not terminal))
     hits = None
 
     failures = {
@@ -318,7 +332,7 @@ def score_response(prompt, text, thinking_chars=0):
         "over_word_limit": words > prompt.get("max_words", MAX_WORDS),
         "too_many_bullets": bullets > MAX_BULLETS,
         "markdown": has_table or has_fence,
-        "unfinished": bool(text) and not finished,
+        "unfinished": truncated,
     }
     grounding = prompt.get("grounding")
     if grounding:
@@ -328,10 +342,18 @@ def score_response(prompt, text, thinking_chars=0):
     if source:
         failures["source_not_cited"] = source.lower() not in lowered
 
+    # Cosmetic notes: do not veto the model, but worth reporting.
+    minor = []
+    if text and not terminal and not truncated:
+        minor.append("no_final_stop")
+    if bullets > 0 and prompt.get("style") != "bullets" and bullets <= MAX_BULLETS:
+        minor.append("used_bullets")
+
     reasons = sorted(name for name, bad in failures.items() if bad)
     return {
         "comply": not reasons,
         "reasons": reasons,
+        "minor": sorted(minor),
         "words": words,
         "bullets": bullets,
         "chunks": (-(-len(text) // REPLY_MAX_CHARS)) if text else 0,
@@ -423,7 +445,14 @@ def run_prompt(base_url, model, prompt, options, timeout, stream=True, think=Non
         "response": text,
         **memory,
     }
-    result.update(score_response(prompt, text, thinking_chars))
+    max_tokens = None
+    try:
+        max_tokens = int((options or {}).get("num_predict"))
+    except (TypeError, ValueError):
+        max_tokens = None
+    cap_hit = bool(max_tokens) and eval_count >= max_tokens
+    result.update(score_response(prompt, text, thinking_chars, hit_token_cap=cap_hit))
+    result["hit_token_cap"] = cap_hit
     return result
 
 
@@ -529,6 +558,13 @@ def summarise(model, size_bytes, runs, repeats):
         "reasons": sorted(
             {reason for run in runs for reason in run.get("reasons", [])}
         ),
+        "minor": sorted(
+            {note for run in runs for note in run.get("minor", [])}
+        ),
+        "minor_counts": {
+            note: len([run for run in runs if note in run.get("minor", [])])
+            for note in sorted({n for run in runs for n in run.get("minor", [])})
+        },
         "reasoning_leaks": len([run for run in runs if run.get("reasoning_leak")]),
         "verdict": verdict(len([run for run in runs if run.get("comply")]), len(runs)),
         "errors": errors,
@@ -588,11 +624,13 @@ def markdown_report(host, summaries, options):
         "75-99%, `not recommended` = below 75%."
     )
     lines.append("")
-    lines.append("| Model | Comply | Avg words | Pkts | Verdict | Failures |")
-    lines.append("|---|---:|---:|---:|---|---|")
+    lines.append("| Model | Comply | Avg words | Pkts | Verdict | Failures | Minor |")
+    lines.append("|---|---:|---:|---:|---|---|---|")
     for row in sorted(summaries, key=lambda item: item["size_bytes"] or 0):
+        counts = row.get("minor_counts") or {}
+        minor = ", ".join(f"{note} x{counts[note]}" for note in sorted(counts))
         lines.append(
-            "| `{model}` | {ok}/{runs} | {words} | {pkts} | {verdict} | {reasons} |"
+            "| `{model}` | {ok}/{runs} | {words} | {pkts} | {verdict} | {reasons} | {minor} |"
             .format(
                 model=row["model"],
                 ok=row["complying"],
@@ -601,6 +639,7 @@ def markdown_report(host, summaries, options):
                 pkts=row["chunks_avg"] if row["chunks_avg"] is not None else "-",
                 verdict=row["verdict"],
                 reasons=", ".join(row["reasons"]) or "-",
+                minor=minor or "-",
             )
         )
     for row in summaries:

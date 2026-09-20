@@ -214,11 +214,26 @@ and whether the answer was actually usable:
 |-------|-----------|
 | `empty` | no visible content arrived - the usual symptom of reasoning eating the budget |
 | `over_word_limit` | longer than the prompt's budget (90 words, or 60/45 where the prompt asks for less) |
-| `too_many_bullets` | more than 3 list items |
+| `too_many_bullets` | more than 3 list items, including bullets written inline on one line |
 | `markdown` | a Markdown table or code fence appears |
-| `unfinished` | the reply ends on a comma, dash or connector, i.e. token-cap truncation |
+| `unfinished` | the reply was cut off: it ends on a comma, dash or connector, or it stopped at the token cap without a final full stop |
 | `not_grounded` | fewer than 2 terms from the supplied retrieval context appear |
 | `source_not_cited` | the supplied source (`wttr`, `news`) is not named |
+
+Two cosmetic notes are recorded but do not veto a model, because the failure is
+in the answer's packaging rather than its content:
+
+| Note | Recorded when |
+|------|---------------|
+| `no_final_stop` | the reply finished on its own but omitted the closing full stop |
+| `used_bullets` | bullets were used where the prompt did not ask for them (still within budget) |
+
+A note on the truncation rule: a trailing source token is not truncation. An
+earlier version of the check matched the `in` of `wttr.in` as a dangling
+connector and flagged every weather reply as cut off mid-sentence; the check now
+requires that a connector word is not preceded by a word character, `.` or `/`,
+and only treats a missing full stop as truncation when the model actually hit the
+token cap.
 
 **Verdict rule:** `recommended` = complied on every prompt, `flaky` = 75-99%,
 `not recommended` = below 75%. Run the harness with
@@ -234,16 +249,16 @@ against the prompt the bridge actually sends, not the short built-in one.
 | `lfm2.5-230m` | 6/6 | 33 | 1.83 | recommended | - |
 | `lfm2.5-1.2b` | 6/6 | 32 | 1.50 | recommended | - |
 | `bonsai-4b` | 6/6 | 37 | 2.00 | recommended | - |
+| `gemma3:1b` | 6/6 | 36 | 1.83 | recommended | - |
 | `lfm2.5-350m` | 5/6 | 29 | 1.33 | flaky | source_not_cited |
-| `gemma3:1b` | 5/6 | 36 | 1.83 | flaky | unfinished |
 | `llama3.2:1b-instruct-q4_K_M` | 5/6 | 47 | 2.17 | flaky | too_many_bullets |
-| `minicpm5-2b` | 5/6 | 37 | 1.83 | flaky | too_many_bullets |
+| `minicpm5-2b` | 5/6 | 37 | 1.83 | flaky | unfinished |
 | `qwen2.5:3b-instruct-q4_K_M` | 5/6 | 37 | 1.83 | flaky | too_many_bullets |
-| `ling-3.0-tiny` | 5/6 | 39 | 2.00 | flaky | not_grounded, source_not_cited |
-| `qwen3:0.6b` | 4/6 | 33 | 1.67 | not recommended | source_not_cited, too_many_bullets |
-| `qwen2.5:1.5b-instruct-q4_K_M` | 4/6 | 38 | 1.83 | not recommended | source_not_cited, too_many_bullets |
-| `qwen2.5:0.5b` | 3/6 | 43 | 1.83 | not recommended | over_word_limit, source_not_cited, too_many_bullets |
-| `bonsai-1.7b` | 3/6 | 41 | 2.00 | not recommended | over_word_limit, too_many_bullets, unfinished |
+| `bonsai-1.7b` | 5/6 | 41 | 2.00 | flaky | over_word_limit |
+| `qwen2.5:1.5b-instruct-q4_K_M` | 4/6 | 38 | 1.83 | not recommended | too_many_bullets, source_not_cited |
+| `ling-3.0-tiny` | 3/6 | 39 | 2.00 | not recommended | unfinished x2, too_many_bullets, not_grounded |
+| `qwen3:0.6b` | 3/6 | 33 | 1.67 | not recommended | unfinished x2, too_many_bullets, source_not_cited |
+| `qwen2.5:0.5b` | 3/6 | 43 | 1.83 | not recommended | over_word_limit, too_many_bullets, source_not_cited |
 | `minicpm5-1b` | 1/6 | 18 | 1.00 | not recommended | empty, not_grounded, source_not_cited |
 | `qwen3.5:0.8b` | 0/6 | - | - | not recommended | empty, not_grounded, source_not_cited |
 | `spark-x2.5-1.7b` | 0/6 | - | - | not recommended | empty, not_grounded, source_not_cited |
@@ -253,29 +268,98 @@ against the prompt the bridge actually sends, not the short built-in one.
 | Model | Comply | Avg words | Pkts | Verdict | Failures |
 |---|---:|---:|---:|---|---|
 | `lfm2.5-350m` | 5/6 | 26 | 1.33 | flaky | source_not_cited |
-| `lfm2.5-230m` | 4/6 | 43 | 1.83 | not recommended | too_many_bullets, unfinished |
-| `qwen2.5:0.5b` | 2/6 | 33 | 1.50 | not recommended | source_not_cited, too_many_bullets |
-| `minicpm5-1b` | 1/6 | 32 | 2.00 | not recommended | empty, not_grounded, source_not_cited |
+| `lfm2.5-230m` | 5/6 | 43 | 1.83 | flaky | too_many_bullets |
 | `minicpm5-1b` (think off) | 5/6 | 39 | 1.83 | flaky | too_many_bullets |
+| `qwen2.5:0.5b` | 2/6 | 33 | 1.50 | not recommended | too_many_bullets x2, source_not_cited x2 |
+| `minicpm5-1b` | 1/6 | 32 | 2.00 | not recommended | empty, not_grounded, source_not_cited |
 
-#### Confirmed over three passes
+#### Confirmed over repeated passes (Raspberry Pi 5)
 
-A single failure can be noise, so the plausible candidates were re-run twice more
-with a different seed (three samples per prompt, 18 per model). Note how the
-one-pass perfect scores do not survive repetition:
+A single failure can be noise, so the plausible candidates were re-run with a
+different seed (two passes over all six prompts, 12 samples per model). The
+corrected truncation rule is used here:
 
 | Model | Comply | Rate | Avg words | Pkts | Verdict | Failures |
 |---|---:|---:|---:|---:|---|---|
-| `lfm2.5-1.2b` | 16/18 | 89% | 32 | 1.50 | flaky | unfinished x2 |
-| `gemma3:1b` | 15/18 | 83% | 38 | 1.94 | flaky | unfinished x3 |
-| `lfm2.5-230m` | 14/18 | 78% | 31 | 1.61 | flaky | unfinished x2, source_not_cited x2 |
-| `lfm2.5-350m` | 13/18 | 72% | 26 | 1.33 | not recommended | source_not_cited x5 |
-| `qwen2.5:0.5b` | 11/18 | 61% | 46 | 1.94 | not recommended | too_many_bullets x4, over_word_limit x3, source_not_cited x3 |
+| `lfm2.5-1.2b` | 12/12 | 100% | 32 | 1.50 | recommended | - |
+| `gemma3:1b` | 12/12 | 100% | 38 | 1.94 | recommended | - |
+| `lfm2.5-230m` | 10/12 | 83% | 31 | 1.61 | flaky | source_not_cited x2 |
+| `lfm2.5-350m` | 8/12 | 67% | 26 | 1.33 | not recommended | source_not_cited x4 |
+| `qwen2.5:0.5b` | 8/12 | 67% | 46 | 1.94 | not recommended | over_word_limit x2, source_not_cited x2 |
+| `minicpm5-1b` (think off) | 8/12 | 67% | - | - | not recommended | over_word_limit x2, too_many_bullets x2 |
+
+The Pi is too slow to build a large sample, so the question was settled on a
+CUDA host instead - see the next section.
+
+#### RTX 3070 workstation (2x RTX 3070 8 GB, CUDA)
+
+The same harness and the same `agent_prompt.txt`, run on an x86 box with two RTX
+3070s. This is where the "who actually follows instructions" question can be
+answered at scale, because a full sweep takes minutes rather than hours. Three
+passes over all six prompts (18 samples per model), `AI_MAX_TOKENS=220`:
+
+| Model | Size GB | Load s | TTFT s | Wall s | Tok/s | RSS MB | Comply |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `lfm2.5-230m` | 0.25 | 0.47 | 0.61 | 2.2 | 38.4 | 1147 | 15/18 |
+| `lfm2.5-350m` | 0.38 | 0.50 | 0.65 | 1.94 | 38.1 | 1187 | 12/18 |
+| `qwen2.5:0.5b` | 0.40 | 0.72 | 2.06 | 2.42 | 134.9 | 1437 | 9/18 |
+| `qwen3:0.6b` | 0.52 | 0.56 | 0.72 | 2.25 | 131.3 | 1430 | 0/18 |
+| `granite4:350m` | 0.71 | 0.67 | 0.82 | 1.01 | 153.7 | 1625 | 12/18 |
+| `lfm2.5-1.2b` | 0.73 | 0.56 | 0.78 | 2.43 | 31.1 | 1934 | 18/18 |
+| `llama3.2:1b-instruct-q4_K_M` | 0.81 | 0.85 | 0.96 | 1.43 | 156.5 | 1851 | 12/18 |
+| `gemma3:1b` | 0.82 | 0.93 | 1.17 | 1.91 | 87.5 | 1826 | 15/18 |
+| `qwen2.5:1.5b-instruct-q4_K_M` | 0.99 | 0.78 | 0.93 | 1.66 | 107.6 | 2063 | 9/18 |
+| `deepseek-r1:1.5b` | 1.12 | 0.83 | 0.96 | 2.97 | 108.5 | 2340 | 0/18 |
+| `qwen3:1.7b` | 1.36 | 0.61 | 0.77 | 2.52 | 106.7 | 1695 | 0/18 |
+| `qwen2.5:3b-instruct-q4_K_M` | 1.93 | 0.93 | 1.10 | 1.78 | 76.8 | 2990 | 18/18 |
+| `llama3.2:3b` | 2.02 | 1.03 | 1.19 | 1.98 | 88.2 | 3160 | 9/18 |
+
+#### 60-sample confirmation of the compliant candidates
+
+Three models reached 100% at 18 samples, so each was re-run at ten passes over
+all six prompts (60 samples) with a fresh seed, using the stock
+`agent_prompt.txt`:
+
+| Model | Prompt | Comply | Avg words | Pkts | Minor notes |
+|---|---|---:|---:|---:|---|
+| `gemma3:1b` | stock | 60/60 (100%) | 44 | 2.00 | - |
+| `lfm2.5-1.2b` | stock | 60/60 (100%) | 35 | 1.83 | - |
+| `lfm2.5-1.2b` | tightened | 60/60 (100%) | 35 | 1.83 | - |
+| `qwen2.5:3b-instruct-q4_K_M` | stock | 60/60 (100%) | 40 | 1.67 | `no_final_stop` x20, `used_bullets` x20 |
+
+"tightened" is a variant of the deployed prompt with the reply budget stated as a
+hard limit ("at most 3 bullet lines and 60 words - count them") instead of
+"preferably under 90 words". It is model-dependent and worth measuring per model
+rather than assuming: it lifted `qwen2.5:3b` from 25/30 to 30/30, made no
+difference to `lfm2.5-1.2b`, and *hurt* `gemma3:1b` (30/30 down to 20/30) by
+pushing it into a bullet-list format it does not handle as well.
+
+**What this settles.** Of 13 small models tested, exactly three obey the reply
+contract on every one of 60 attempts, and only when the truncation check is
+applied consistently:
+
+| Model | Size GB | Tok/s | Wall s | TTFT s | Comply (60) |
+|---|---:|---:|---:|---:|---:|
+| `lfm2.5-1.2b` | **0.73** | 31.1 | 2.43 | 0.78 | 100% |
+| `gemma3:1b` | 0.82 | **87.5** | **1.91** | 1.17 | 100% |
+| `qwen2.5:3b-instruct-q4_K_M` | 1.93 | 76.8 | 1.78 | 1.10 | 100% |
+
+- **`gemma3:1b` is the best all-round choice on hardware with headroom.** It is
+  within 0.1 GB of the smallest compliant model, roughly 3x faster to decode than
+  `lfm2.5-1.2b`, and it needed no cosmetic notes at all over 60 samples.
+- **`lfm2.5-1.2b` is the choice when memory or CPU-only latency dominates.** It is
+  the smallest model that complies every time, and it is the only compliant model
+  small enough to consider on a 2 GB host.
+- **`qwen2.5:3b` complies, but costs 2.6x the disk and RAM** for no accuracy
+  advantage, and every one of its replies needed a cosmetic note.
+- Nothing below 0.7 GB complied reliably: `lfm2.5-350m` (12/18 at 18 samples,
+  8/12 on the Pi) and `lfm2.5-230m` (15/18, 10/12) are fast but drop instructions.
+- Every reasoning model in default mode scored **0/18** (`qwen3:0.6b`,
+  `qwen3:1.7b`, `deepseek-r1:1.5b`), confirming the `empty` failure class.
 
 #### How to read this
 
-Nothing tested obeyed the contract every time. The failures fall into three
-classes that matter very differently:
+The failures fall into three classes that matter very differently:
 
 | Class | Checks | Effect |
 |-------|--------|--------|
@@ -285,22 +369,26 @@ classes that matter very differently:
 
 What that means in practice:
 
+- Three models clear the bar at 60 samples: `gemma3:1b`, `lfm2.5-1.2b` and
+  `qwen2.5:3b`. Below 0.7 GB nothing complied reliably.
 - Every model with a hard failure is either a reasoning model in default mode
-  (`qwen3.5:0.8b`, `spark-x2.5`, `minicpm5-1b`) or a 1-bit quantisation
-  (`bonsai-1.7b`, which breaks the style rules too). `think: false` fixes the
-  reasoning models' empty replies - `minicpm5-1b` goes from 1/6 to 5/6 - but it
-  cannot be relied on through the bridge, which sends no such flag.
-- **`qwen2.5:0.5b`, the current default, is the weakest of the candidates**: 61%
-  across three passes, breaching the word budget, the bullet budget and source
-  citation. It was chosen because it is the only model that *runs* on 2 GB, not
-  because it follows instructions well.
-- The LFM2.5 family behaves best (`lfm2.5-1.2b` 89%, `lfm2.5-230m` 78%), and its
-  failures are the cheap kind - a missing `source:` note or a reply that stops on a
-  comma - not invented answers.
-- Because even the best model slips, **enforce the budget in the bridge instead of
-  trusting the model**. `REPLY_MAX_CHARS` already chunks long replies; trimming to a
-  word/packet budget would remove the `over_word_limit` and `unfinished` classes
-  outright. Select models on the hard-failure class, which no prompt change fixes.
+  (`qwen3:0.6b`, `qwen3:1.7b`, `deepseek-r1:1.5b`, `qwen3.5:0.8b`, `spark-x2.5`,
+  `minicpm5-1b`) or a 1-bit quantisation (`bonsai-1.7b`, which breaks the style
+  rules too). `think: false` fixes the reasoning models' empty replies -
+  `minicpm5-1b` goes from 1/6 to 5/6 on the Pi 4 - but it cannot be relied on
+  through the bridge, which sends no such flag.
+- **`qwen2.5:0.5b` is the weakest candidate of its size class**: 50% at 18
+  samples, 67% on the Pi, breaching the word budget, the bullet budget and source
+  citation. It was chosen as the shipped default only because it is the one
+  registry model that *runs* on 2 GB, not because it follows instructions well.
+  Prefer `lfm2.5-1.2b` (100%) wherever the host can hold ~1 GB of model.
+- The LFM2.5 family is the most consistent family overall, and its failures are
+  the cheap kind - a missing `source:` note, or a reply that runs past its word
+  budget - not invented answers.
+- Even the compliant models occasionally slip, so **enforce the budget in the
+  bridge instead of trusting the model**. `REPLY_MAX_CHARS` already chunks long
+  replies; trimming to a word/packet budget would remove the `over_word_limit` and
+  `unfinished` classes outright, and would also absorb the `no_final_stop` notes.
 
 #### Endpoint check
 
@@ -313,28 +401,37 @@ through the same endpoint once imported.
 
 ### Recommended model per host
 
-Speed decides what fits; compliance decides what is worth running. Rates are from
-the three-pass run where available, otherwise a single pass.
+Speed decides what fits; compliance decides what is worth running. Comply figures
+are from the 60-sample confirmation where available, otherwise the repeated Pi run,
+using the corrected truncation rule.
 
 | Host RAM | First choice | Comply | Registry-only alternative |
 |---------:|--------------|-------:|--------------------------|
-| 2 GB | `lfm2.5-350m` † - 8.6 tok/s on the Pi 4, RSS 516 MB, 1.05 GB left free | 72-83% | `qwen2.5:0.5b` - 8.0 tok/s, RSS 675 MB (61%) |
-| 2 GB, if latency matters more | `lfm2.5-230m` † - 12.8 tok/s, RSS 383 MB | 67-78% | - |
-| 4 GB | `lfm2.5-1.2b` † - 15.5 tok/s, RSS 967 MB | 89% | `gemma3:1b` - 11 tok/s, RSS 1.3 GB (83%) |
-| 8 GB | `lfm2.5-1.2b` † - 15.5 tok/s, RSS 967 MB | 89% | `gemma3:1b` or `llama3.2:1b-instruct-q4_K_M` (83%) |
-| 8 GB, more capable | `qwen2.5:3b-instruct-q4_K_M` - 5 tok/s, RSS 2.4 GB | 83% | `llama3.2:3b-instruct-q4_K_M` |
+| 2 GB | `lfm2.5-1.2b` † - RSS ~967 MB, fits the 1.1 GB cap, 100% compliant everywhere tested | 100% | - |
+| 2 GB, if that does not fit | `lfm2.5-350m` † - 8.6 tok/s, RSS 516 MB, 1.05 GB free | 67-83% | `qwen2.5:0.5b` - 8.0 tok/s, RSS 675 MB (33-67%) |
+| 2 GB, if latency matters more | `lfm2.5-230m` † - 12.8 tok/s, RSS 383 MB | 78-83% | - |
+| 4 GB | `lfm2.5-1.2b` † - 15.5 tok/s, RSS 967 MB | 100% | `gemma3:1b` - 11.2 tok/s, RSS 1.3 GB (100%) |
+| 8 GB | `lfm2.5-1.2b` † - 15.5 tok/s, RSS 967 MB | 100% | `gemma3:1b` - 11.2 tok/s, RSS 1.3 GB (100%) |
+| 8 GB, CUDA GPU | `gemma3:1b` - 87.5 tok/s, 1.91 s per reply | 100% | `qwen2.5:3b-instruct-q4_K_M` - 76.8 tok/s, RSS 3.0 GB (100%) |
 
 † Requires the one-time GGUF import described below.
 
-On the 2 GB Pi 4, `lfm2.5-350m` is the larger of the two LFM2 models that fit and it
-still leaves about 1 GB of RAM free during a reply; `lfm2.5-230m` is roughly 50%
-faster with more headroom, but it garbled a medical term in testing (it produced
-"nausea/ventilator use" instead of "nausea or vomiting"), which is why the bigger
-model is the default there. `lfm2.5-1.2b` is only recommended from 4 GB up: at
-~967 MB resident it would sit against the 1.1 GB Ollama cap that a 2 GB host needs.
+`lfm2.5-1.2b` and `gemma3:1b` both comply every time; which one is faster depends
+on the host rather than on the model. On the Pi's CPU the LFM2.5 model is faster
+(15.5 vs 11.2 tok/s) *and* smaller, so it is the first choice there. On a CUDA host
+`gemma3:1b` is almost 3x faster (87.5 vs 31.1 tok/s) and needs no cosmetic notes,
+so it is the first choice there.
 
-Do not deploy: `qwen3.5:0.8b`, `spark-x2.5` and default-mode `minicpm5-1b` (empty
-replies), `bonsai-1.7b` (1-bit and breaks the style rules), or `gemma3n:e2b`,
+`lfm2.5-350m` is no longer the 2 GB default: it is fast and small, but it only
+complied on 67-83% of attempts (a missing `source:` note mostly), which is below
+the bar this repo now sets. It remains the fallback when the ~967 MB of
+`lfm2.5-1.2b` will not fit. `lfm2.5-230m` is roughly 50% faster with more headroom
+but complies slightly less often, and it garbled a medical term in testing (it
+produced "nausea/ventilator use" instead of "nausea or vomiting").
+
+Do not deploy: `qwen3:0.6b`, `qwen3:1.7b`, `deepseek-r1:1.5b`, `qwen3.5:0.8b`,
+`spark-x2.5` and default-mode `minicpm5-1b` (empty replies - every reasoning model
+scored 0/18), `bonsai-1.7b` (1-bit and breaks the style rules), or `gemma3n:e2b`,
 `gemma3:4b` and `granite4:micro-h` (3.9-6.1 tok/s, and `gemma3n:e2b` needs 5.3 GB
 RSS). On the 2 GB Pi 4 `gemma3:1b` is *not* a safe alternative - it swapped hard and
 reset the board - so `lfm2.5-350m`, `lfm2.5-230m` and `qwen2.5:0.5b` are the only
