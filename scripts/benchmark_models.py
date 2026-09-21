@@ -515,6 +515,19 @@ def verdict(comply_ok, runs):
     return "not recommended"
 
 
+def repeat_seed(base_seed, repeat):
+    """Seed to use for one repeat of the prompt set.
+
+    Repeats only mean something if they are independent samples. Passing the same
+    seed to every repeat makes the sampler reproduce the same reply byte for byte,
+    so N repeats measure a single generation N times over rather than N different
+    attempts - which flatters a model that happens to be lucky on the first draw.
+    Each repeat therefore shifts the seed, and the seed actually used is recorded
+    with every run.
+    """
+    return base_seed + repeat
+
+
 def summarise(model, size_bytes, runs, repeats):
     """Collapse all runs for one model into a comparable row."""
     ok_runs = [run for run in runs if run["ok"]]
@@ -715,7 +728,14 @@ def main(argv=None):
     if args.system_file:
         system = Path(args.system_file).read_text(encoding="utf-8").strip()
         system_label = f"custom prompt ({len(system)} chars)"
-    report_options = dict(options, think=args.think, system=system_label)
+    if args.repeats > 1:
+        # Repeats shift the seed, so report the range rather than one number.
+        report_seed = f"{args.seed}..{repeat_seed(args.seed, args.repeats - 1)}"
+    else:
+        report_seed = str(args.seed)
+    report_options = dict(
+        options, think=args.think, system=system_label, seed=report_seed
+    )
 
     installed = list_models(args.base_url)
     if not installed:
@@ -753,6 +773,7 @@ def main(argv=None):
     for model in selected:
         runs = []
         for repeat in range(args.repeats):
+            run_options = dict(options, seed=repeat_seed(args.seed, repeat))
             if args.unload_all:
                 unload_all_models(args.base_url, installed)
             if not args.no_unload:
@@ -762,11 +783,12 @@ def main(argv=None):
                     args.base_url,
                     model,
                     prompt,
-                    options,
+                    run_options,
                     args.timeout,
                     think=think,
                     system=system,
                 )
+                result["seed"] = run_options["seed"]
                 runs.append(result)
                 status = "ok" if result["ok"] else f"FAIL ({result['error']})"
                 fit = "comply" if result["comply"] else "BREACH:" + ",".join(result["reasons"])

@@ -127,6 +127,18 @@ class ScorerTests(unittest.TestCase):
         self.assertTrue(result["reasoning_leak"])
         self.assertTrue(result["comply"], result["reasons"])
 
+    def test_repeats_use_independent_seeds(self):
+        """Repeats must shift the seed, or they measure one generation N times.
+
+        Regression: every repeat used the same seed, so a model that was lucky on
+        its one real sample scored 100% no matter how many times it was repeated.
+        """
+        self.assertEqual(bm.repeat_seed(42, 0), 42)
+        self.assertEqual(bm.repeat_seed(42, 1), 43)
+        self.assertEqual(
+            len({bm.repeat_seed(42, repeat) for repeat in range(10)}), 10
+        )
+
     def test_packet_count_uses_the_configured_chunk_size(self):
         result = bm.score_response(prompt("wiki_context"), "x" * (bm.REPLY_MAX_CHARS * 2 + 1))
         self.assertEqual(result["chunks"], 3)

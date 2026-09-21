@@ -157,21 +157,28 @@ the host network policy.
 ### Local AI model
 
 The bridge answers with a small local model served by [Ollama](https://ollama.com/);
-any OpenAI-compatible endpoint works instead. Pick by the host's RAM, but pick on
-**instruction compliance first and speed second** - only three of the 13 small
-models measured obeyed the reply contract on every one of 60 attempts:
+any OpenAI-compatible endpoint works instead. Pick on **instruction compliance
+first and speed second**. Across the models measured, only two obey the reply
+contract close to always (35 of 36 samples each, measured on two different hosts):
 
 | Host RAM | Model | Comply |
 |---------:|-------|-------:|
-| 2 GB | `lfm2.5-1.2b` (needs the one-time import below); `lfm2.5-350m` or `qwen2.5:0.5b` if it will not fit | 100% / 67-83% |
-| 4 GB | `lfm2.5-1.2b`, or the registry build `gemma3:1b` | 100% |
-| 8 GB | `lfm2.5-1.2b` (15.5 tok/s) or `gemma3:1b` (11.2 tok/s) | 100% |
-| 8 GB with a CUDA GPU | `gemma3:1b` - 87.5 tok/s | 100% |
+| 4 GB | `lfm2.5-1.2b` - needs the one-time import below; `gemma2:2b` if you would rather not import | ~97% |
+| 8 GB | `lfm2.5-1.2b` (15.5 tok/s on a Pi 5) or the registry build `gemma3:1b` (11.2 tok/s) | ~97% / ~94% |
+| 8 GB with a CUDA GPU | `gemma3:1b` - 87.5 tok/s | ~97% |
+| 2 GB | `lfm2.5-230m` - the best model that fits, but expect roughly 1 reply in 5 to breach | ~78% |
+
+The two leaders swap first place between hosts, so on compliance there is nothing
+to choose between them; `gemma2:2b` (1.6 GB, 58/60 over 60 samples) matches them
+and installs with a plain `ollama pull`, so it is the best choice if you want a
+compliant model without the one-time GGUF import. The Gemma family places at or
+near the top of every size class measured.
 
 The default `qwen2.5:0.5b` is retained only because it is the one registry build
-measured as stable on the documented 2 GB minimum; it complied on just 33-67% of
-attempts, so prefer `lfm2.5-1.2b` on any host that can hold ~1 GB of model. Both
-LFM2.5 models need the one-time GGUF import described in [MODELS.md](MODELS.md).
+measured as stable on the documented 2 GB minimum; it complied on about half of its
+samples. Note that **no model that fits a 2 GB host complies reliably** - the
+compliant models need roughly 1 GB of model resident. Both LFM2.5 models need the
+one-time GGUF import described in [MODELS.md](MODELS.md).
 
 Two failure modes are worth knowing before you deploy:
 
